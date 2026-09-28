@@ -135,13 +135,33 @@ export class GrokModelSession {
       if (this.activePrompt) { this.activePrompt = undefined; this.rejectParked('Grok connection dropped; the turn was lost.'); }
       this.reconnected = this.connection.lastDrop ?? 'reconnected';
     }
-    const { sessionId } = await this.connection.attachSession({
+    const { sessionId, response } = await this.connection.attachSession({
       sessionId: this.grokSessionId, cwd: this.cwd, serverId: this.serverId, serverName: 'pi', rules,
       offerPiTools: this.tools.length > 0, grokMode: this.grokMode,
       handlers: { onUpdate: (n) => this.onUpdate(n), onMcp: (m) => this.onMcp(m), onPermission: (r) => this.permission(r), onHookRun: (p, gate) => this.onHookRun(p, gate), onHookEvent: (p) => { void this.onHookRun(p); }, onQuestion: (q) => this.ask(q), onSessionExt: (u) => this.onSessionExt(u) },
     });
     this.grokSessionId = sessionId;
     this.attachedGeneration = this.connection.generation;
+    // Grok reports the session's model and the models this account may use as the `model` config option.
+    const modelOption = ((response as { configOptions?: { id?: string; currentValue?: string; options?: { value?: string }[] }[] }).configOptions ?? []).find((o) => o.id === 'model');
+    if (modelOption) {
+      this.grokModel = modelOption.currentValue;
+      this.grokModels = (modelOption.options ?? []).map((o) => o.value).filter((v): v is string => !!v);
+    }
+  }
+
+  /** Grok's current model for this session, and the models the signed-in account may use, from the `model` config option. */
+  grokModel?: string;
+  grokModels?: string[];
+
+  /** Switch Grok to the model picked in Pi. Without this Grok runs its default model whatever Pi shows. */
+  async applyModel(modelId: string) {
+    if (modelId === this.grokModel) return;
+    if (this.grokModels?.length && !this.grokModels.includes(modelId)) {
+      throw new Error(`${modelId} is not available on this Grok account. Available: ${this.grokModels.join(', ')}. Pick one of those in /models.`);
+    }
+    await this.setConfigOption('model', modelId);
+    this.grokModel = modelId;
   }
 
   detach() {
@@ -436,9 +456,12 @@ export class GrokModelSession {
 
 /** Saved media path from a Grok media tool result (`{ type: "ImageGen", path, filename, session_folder }` and kin). */
 export function mediaPath(value: unknown): string | undefined {
-  const v = (value ?? {}) as Record<string, any>;
+  const v = (value ?? {}) as { path?: unknown; type?: unknown };
   return typeof v.path === 'string' && /^(ImageGen|ImageEdit|ImageToVideo|ReferenceToVideo|VideoGen)$/.test(String(v.type ?? '')) ? v.path : undefined;
 }
+
+/** The fields `resultText` looks at in a Grok tool result envelope. */
+type ResultEnvelope = { FileContent?: { raw_output?: unknown; content?: unknown }; output?: unknown; stdout?: unknown; text?: unknown; content?: unknown; message?: unknown };
 
 /** Best-effort plain text from a Grok tool result envelope (e.g. ReadFile.FileContent.raw_output, or a string). */
 export function resultText(value: unknown, limit = 8000): string | undefined {
@@ -446,10 +469,10 @@ export function resultText(value: unknown, limit = 8000): string | undefined {
   if (typeof value === 'string') return value.slice(0, limit);
   const media = mediaPath(value);
   if (media) return media;
-  const v = value as Record<string, any>;
+  const v = value as ResultEnvelope;
   const nested = v.FileContent?.raw_output ?? v.FileContent?.content ?? v.output ?? v.stdout ?? v.text ?? v.content ?? v.message;
   if (typeof nested === 'string') return nested.slice(0, limit);
-  if (Array.isArray(nested)) return nested.map((c) => (typeof c === 'string' ? c : c?.text ?? '')).join('').slice(0, limit) || undefined;
+  if (Array.isArray(nested)) return nested.map((c: unknown) => (typeof c === 'string' ? c : String((c as { text?: unknown } | null)?.text ?? ''))).join('').slice(0, limit) || undefined;
   return JSON.stringify(value).slice(0, limit);
 }
 

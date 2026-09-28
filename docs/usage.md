@@ -67,6 +67,8 @@ A clone also auto-starts the gateway: it runs `scripts/server.ts` from the check
 | `grok/grok-4.6` | Grok 4.6 | low, medium, high, xhigh |
 | `grok/grok-4.5` | Grok 4.5 | low, medium, high |
 
+Which of these a Grok account may use depends on the account. Grok reports the allowed models for each session; a free account on 2026-09-28 had only `grok-4.7`. Pi switches the Grok session to the model picked in `/models`. A model the account lacks fails the turn with the list of available models; before 0.1.1, Grok silently ran its default model instead.
+
 Each model has a 500,000-token context window and a 32,000-token output limit in Pi's metadata. Per-token cost is zero in the metadata. The turn cost comes from Grok's `turn_completed` report, converted at 1e9 ticks per US dollar. That ratio is inferred from Grok's rates. It is not documented by Grok.
 
 Pi controls work as usual:

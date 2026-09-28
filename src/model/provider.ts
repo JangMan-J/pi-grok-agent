@@ -129,6 +129,7 @@ export function createGrokStream(connection: GrokModelConnection, sessions: Sess
       session.piToolNames = piTools.map((t) => t.name);
       session.tools = selectPiTools(piTools, sessions.piTools ?? 'extensions');
       await session.attach(getCurrentSystemPrompt(context.messages) || undefined);
+      await session.applyModel(model.id); // before the effort: grok-4.5 has no xhigh
       await session.applyEffort(options?.reasoning); // Pi's thinking level drives Grok's reasoning_effort
       signal?.throwIfAborted();
       const { history, tail } = splitTail(context.messages);

@@ -238,3 +238,23 @@ test('a signed-out Grok fails the turn with a pointer to /grok login, and the ne
   assert.equal(connection.isOpen, false, 'the connection is dropped, so the turn after a login initializes again');
   await assert.rejects(connection.open(), /not signed in/, 'a second open asks Grok again instead of reusing a stale answer');
 });
+
+test('the model picked in Pi is applied to the Grok session; one the account lacks fails with the available list', async (t) => {
+  const s = scratch(); t.after(s.cleanup);
+  const port = await freePort();
+  const gw = startGateway(gatewayEnv(s, port, { FAKE_GROK_MODELS: 'grok-4.7,grok-4.6' }));
+  t.after(() => stop(gw.child));
+  await gw.ready();
+  const connection = new GrokModelConnection({ url: `ws://127.0.0.1:${port}/ws`, secret: SECRET });
+  t.after(() => connection.close());
+  const session = new GrokModelSession(connection, 'pi-model', s.home);
+  await session.attach(undefined);
+  assert.equal(session.grokModel, 'grok-4.7');
+  assert.deepEqual(session.grokModels, ['grok-4.7', 'grok-4.6']);
+  await session.applyModel('grok-4.7');
+  assert.equal(received(s, 'set_config_option').length, 0, 'already current: nothing sent');
+  await session.applyModel('grok-4.6');
+  await until(() => received(s, 'set_config_option').length === 1, 'set_config_option at Grok');
+  assert.deepEqual(received(s, 'set_config_option')[0].params, { sessionId: 'fake-session', configId: 'model', value: 'grok-4.6' });
+  await assert.rejects(session.applyModel('grok-4.5'), /grok-4\.5 is not available on this Grok account\. Available: grok-4\.7, grok-4\.6/);
+});
