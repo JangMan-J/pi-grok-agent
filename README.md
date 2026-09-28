@@ -13,7 +13,7 @@ After [setup](#quick-start), select Grok like any Pi model:
 pi --model grok/grok-4.7
 ```
 
-Status: version 0.1.0. Developed and tested on Linux with Node.js 26.10.0, Pi 0.87.1, and Grok Build 1.0.41. Other versions and platforms are untested.
+Status: version 0.1.0 on [npm](https://www.npmjs.com/package/pi-grok-agent). Developed and tested on Linux with Node.js 26.10.0, Pi 0.87.1, and Grok Build 1.0.41. Other versions and platforms are untested.
 
 This package connects an agent, not the xAI chat-completions API. It needs a logged-in Grok Build CLI and a local gateway.
 The tool gates are not an operating-system sandbox.

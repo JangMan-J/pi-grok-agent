@@ -47,4 +47,4 @@ Invariants:
 
 Every capability claim in `README.md` or `docs/` must point to source, a unit test, or a probe result that exists. Mark a claim as unverified when its evidence file is absent. Record the Grok, Pi, and Node versions with each live result. Tracked files use repository-relative or `~/` paths only.
 
-The license is Apache-2.0 (`LICENSE`, `license` in `package.json`). The owner removed `"private": true` on 2026-09-28 to publish `pi-grok-agent` on npm; the owner runs `npm publish`. Check `npm pack --dry-run` before a release: the `files` list decides the tarball.
+The license is Apache-2.0 (`LICENSE`, `license` in `package.json`). Published on npm as `pi-grok-agent` (0.1.0 on 2026-09-28). The owner runs `npm publish`; it needs the owner's npm login and browser 2FA. A release needs a version bump. Check `npm pack --dry-run` before a release: the `files` list decides the tarball.
