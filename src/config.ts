@@ -84,7 +84,7 @@ export async function readSecretFile(secretFile: string): Promise<string | undef
 }
 
 export async function readConfig() {
-  let settings: { url?: string; secretFile?: string; piTools?: PiToolPolicy; hooks?: HookSettings; headlessPermissions?: HeadlessPermissionPolicy; guard?: GuardSettings; mediaDir?: string; grokMode?: GrokMode } = {};
+  let settings: { url?: string; secretFile?: string; piTools?: PiToolPolicy; hooks?: HookSettings; headlessPermissions?: HeadlessPermissionPolicy; guard?: GuardSettings; mediaDir?: string; grokMode?: GrokMode; autoStartGateway?: boolean } = {};
   try { settings = JSON.parse(await readFile(configPath, 'utf8')); }
   catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error; }
   const url = validateEndpoint(process.env.GROK_ACP_URL || settings.url || 'ws://127.0.0.1:2419/ws');
@@ -106,7 +106,9 @@ export async function readConfig() {
   const mediaDir = process.env.PI_GROK_MEDIA_DIR ?? settings.mediaDir ?? '.pi/grok-images';
   const grokMode = (process.env.PI_GROK_GROK_MODE as GrokMode | undefined) ?? settings.grokMode ?? 'default';
   if (!['default', 'auto', 'yolo'].includes(grokMode)) throw new Error(`grokMode must be default, auto, or yolo (got ${grokMode}).`);
-  return { url, secret, secretFile, piTools, hooks, headlessPermissions, guard, mediaDir, grokMode };
+  // Start the bundled gateway when nothing listens on the endpoint. PI_GROK_AUTOSTART=0 or autoStartGateway: false turns it off.
+  const autoStartGateway = process.env.PI_GROK_AUTOSTART ? !['0', 'false', 'no', 'off'].includes(process.env.PI_GROK_AUTOSTART.toLowerCase()) : settings.autoStartGateway ?? true;
+  return { url, secret, secretFile, piTools, hooks, headlessPermissions, guard, mediaDir, grokMode, autoStartGateway };
 }
 
 function parsePolicy(value: string): PiToolPolicy {

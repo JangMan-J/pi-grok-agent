@@ -5,6 +5,9 @@ import { join } from 'node:path';
 import test from 'node:test';
 import type { ExtensionAPI, ExtensionContext, InputEvent, InputEventResult } from '@earendil-works/pi-coding-agent';
 
+// These tests load the real extension. It must never start a real gateway (and a real Grok leader) from a test.
+process.env.PI_GROK_AUTOSTART = '0';
+
 test('registered input handler leaves other models alone after a Grok session', async (t) => {
   const dir = await mkdtemp(join(tmpdir(), 'pi-grok-extension-test-'));
   const oldDir = process.env.PI_CODING_AGENT_DIR;

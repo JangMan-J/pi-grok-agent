@@ -6,7 +6,7 @@ import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { extname, join } from 'node:path';
-import { readConfig } from './config.ts';
+import { agentDir, readConfig } from './config.ts';
 import { permissionAnswer, permissionDialog } from './model/permissions.ts';
 import { questionAnswerer } from './model/questions.ts';
 import { GrokModelConnection } from './model/connection.ts';
@@ -52,7 +52,7 @@ function oneLine(value: unknown, limit: number): string {
 
 export default async function grokModel(pi: ExtensionAPI) {
   const config = await readConfig();
-  const connection = new GrokModelConnection({ url: config.url, secret: config.secret, secretFile: config.secretFile });
+  const connection = new GrokModelConnection({ url: config.url, secret: config.secret, secretFile: config.secretFile, autoStart: config.autoStartGateway ? { logDir: agentDir } : undefined });
   let current: GrokModelSession | undefined;
   let permissionMode: 'yolo' | 'auto' | 'ask' | 'readonly' = 'auto';
   // Media generated during a turn; flushed as one `grok-media` message after the turn so Pi renders the images
@@ -236,7 +236,7 @@ export default async function grokModel(pi: ExtensionAPI) {
           case 'debug': {
             const u = session.usageTotals; const denied = session.hookLog.filter((h) => h.decision === 'deny').length;
             show('Grok debug', [
-              `gateway: ${config.url} (${connection.isOpen ? 'connected' : 'not connected'}${connection.lastDrop ? `, last drop: ${connection.lastDrop}` : ''})`,
+              `gateway: ${config.url} (${connection.isOpen ? 'connected' : 'not connected'}${connection.launchedGateway ? `, started by this Pi as pid ${connection.launchedGateway}` : ''}${connection.lastDrop ? `, last drop: ${connection.lastDrop}` : ''}; auto-start ${config.autoStartGateway ? 'on' : 'off'})`,
               `grok session: ${session.grokSessionId ?? '(none yet; first message creates it)'}`,
               `mode: ${session.mode}${session.promptActive ? ' (turn running)' : ''}; pi perms: ${session.permissionMode}; grok mode: ${session.grokMode}`,
               `grok context: ${session.lastContextTokens != null ? session.lastContextTokens.toLocaleString() + ' / 500,000' : 'unknown'}`,

@@ -194,3 +194,34 @@ test('a missing secret file fails the first connect with a clear message and is 
   await connection.open();
   assert.ok(connection.isOpen, 'the second open read the file and connected');
 });
+
+test('auto-start: an open with nothing listening starts the bundled gateway detached; the next connection reuses it', async (t) => {
+  const s = scratch(); t.after(s.cleanup);
+  const port = await freePort();
+  const url = `ws://127.0.0.1:${port}/ws`;
+  const agent = join(s.home, 'agent');
+  const secretFile = join(agent, 'grok-ws.secret');
+  // launchGateway passes Pi's environment on, as it would inside Pi. Isolate it; no secret in the env, so the gateway writes the file.
+  const saved = { ...process.env };
+  Object.assign(process.env, gatewayEnv(s, port));
+  delete process.env.GROK_AGENT_SECRET;
+  t.after(() => { for (const key of Object.keys(process.env)) if (!(key in saved)) delete process.env[key]; Object.assign(process.env, saved); });
+  const first = new GrokModelConnection({ url, secret: '', secretFile, autoStart: { logDir: agent } });
+  t.after(() => first.close());
+  await first.open();
+  const gatewayPid = first.launchedGateway;
+  assert.ok(first.isOpen && gatewayPid, 'first open started a gateway and connected');
+  t.after(async () => { if (alive(gatewayPid)) { process.kill(gatewayPid, 'SIGINT'); await until(() => !alive(gatewayPid), 'auto-started gateway exit'); } });
+  assert.ok(existsSync(secretFile), 'the gateway created the secret file the connection then read');
+  assert.match(readFileSync(join(agent, 'grok-ws.log'), 'utf8'), /ready at/);
+  const second = new GrokModelConnection({ url, secret: '', secretFile, autoStart: { logDir: agent } });
+  t.after(() => second.close());
+  await second.open();
+  assert.ok(second.isOpen);
+  assert.equal(second.launchedGateway, undefined, 'a running gateway is reused, not started again');
+  first.close(); second.close();
+  assert.ok(alive(gatewayPid), 'detached: the gateway outlives the connection that started it');
+  const leaderPid = Number(readFileSync(s.lock, 'utf8').trim());
+  process.kill(gatewayPid, 'SIGINT');
+  await until(() => !alive(gatewayPid) && !alive(leaderPid), 'gateway and its leader stop together');
+});
