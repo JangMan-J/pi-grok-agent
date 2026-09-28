@@ -2,7 +2,7 @@
 // (test/fixtures/fake-grok.ts) behind PI_GROK_BINARY, and Pi's own WebSocket wire. No Grok usage is spent.
 import assert from 'node:assert/strict';
 import { spawn, type ChildProcess } from 'node:child_process';
-import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -178,4 +178,19 @@ test('a Grok turn that outlives its Pi session (/new, shutdown) is denied tool u
   assert.equal(received(s, 'o2')[0].result.decision, 'continue', 'post_tool_use has nothing to deny');
   assert.equal(received(s, 'o3')[0].result.decision, 'continue', 'stop is not held open for an orphan');
   assert.equal(session.hookLog.length, 0, 'the detached Pi session saw none of it');
+});
+
+test('a missing secret file fails the first connect with a clear message and is picked up once the gateway wrote it', async (t) => {
+  const s = scratch(); t.after(s.cleanup);
+  const port = await freePort();
+  const secretFile = join(s.home, 'late.secret');
+  const connection = new GrokModelConnection({ url: `ws://127.0.0.1:${port}/ws`, secret: '', secretFile });
+  t.after(() => connection.close());
+  await assert.rejects(connection.open(), /secret not found at .*late\.secret.*pi-grok-gateway/, 'no gateway yet: a message that names the file and the command');
+  const gw = startGateway(gatewayEnv(s, port));
+  t.after(() => stop(gw.child));
+  await gw.ready();
+  writeFileSync(secretFile, SECRET + '\n');
+  await connection.open();
+  assert.ok(connection.isOpen, 'the second open read the file and connected');
 });

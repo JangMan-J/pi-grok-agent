@@ -4,6 +4,7 @@
 // _x.ai/mcp/sdk_call request, routed here by serverId. The stock leader never sees that traffic.
 import { client, type ClientConnection, type InitializeResponse, type NewSessionResponse, type LoadSessionResponse, type SessionNotification, type RequestPermissionRequest, type RequestPermissionResponse } from '@agentclientprotocol/sdk';
 import { openSocket, type ConnectionOptions } from '../client.ts';
+import { readSecretFile } from '../config.ts';
 import { GATE_REGISTRATION_MS } from '../config.ts';
 
 export type McpToolDefinition = { name: string; description: string; inputSchema: Record<string, unknown> };
@@ -49,9 +50,18 @@ export class GrokModelConnection {
   private readonly servers = new Map<string, string>(); // serverId -> sessionId
   private opening?: Promise<void>;
   private closed = false;
-  private readonly options: ConnectionOptions;
+  private readonly options: ConnectionOptions & { secretFile?: string };
 
-  constructor(options: ConnectionOptions) { this.options = options; }
+  /** `secret` may be empty when the gateway has not created its file yet; `secretFile` is read again on each open. */
+  constructor(options: ConnectionOptions & { secretFile?: string }) { this.options = { ...options }; }
+
+  /** Fill in the secret from its file on first open, so Pi loads and the gateway may start after it. */
+  private async resolveSecret() {
+    if (this.options.secret.trim() || !this.options.secretFile) return;
+    const secret = await readSecretFile(this.options.secretFile);
+    if (!secret) throw new Error(`Grok gateway secret not found at ${this.options.secretFile}. Start the gateway once (pi-grok-gateway, or npm run server in the clone); it creates the file. Then send the message again.`);
+    this.options.secret = secret;
+  }
 
   /** Reasons the last connection ended, for status and error text. */
   lastDrop?: string;
@@ -76,6 +86,7 @@ export class GrokModelConnection {
     if (this.opening) return this.opening;
     this.closed = false;
     this.opening = (async () => {
+      await this.resolveSecret();
       const socket = await openSocket(this.options, signal);
       this.socket = socket;
       void socket.closed.then(() => { if (this.socket === socket) this.markDropped('Grok WebSocket closed'); });

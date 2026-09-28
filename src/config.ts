@@ -77,6 +77,12 @@ export type HookSettings = {
   stopCheck?: string;
 };
 
+/** The gateway's shared secret, or undefined when the file does not exist yet. Other read errors propagate. */
+export async function readSecretFile(secretFile: string): Promise<string | undefined> {
+  try { return (await readFile(secretFile, 'utf8')).trim(); }
+  catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined; throw error; }
+}
+
 export async function readConfig() {
   let settings: { url?: string; secretFile?: string; piTools?: PiToolPolicy; hooks?: HookSettings; headlessPermissions?: HeadlessPermissionPolicy; guard?: GuardSettings; mediaDir?: string; grokMode?: GrokMode } = {};
   try { settings = JSON.parse(await readFile(configPath, 'utf8')); }
@@ -85,7 +91,9 @@ export async function readConfig() {
   const configuredFile = settings.secretFile || defaultSecretFile;
   const secretFile = configuredFile.startsWith('~/') ? join(homedir(), configuredFile.slice(2)) : configuredFile;
   if (!isAbsolute(secretFile)) throw new Error('grok-ws secretFile must be absolute or start with ~/.');
-  const secret = process.env.GROK_AGENT_SECRET || (await readFile(secretFile, 'utf8')).trim();
+  // A missing secret file is not a load error: Pi exits on any extension load failure, and the gateway that creates
+  // the file may not have run yet. The connection reads the file again when it opens (`readSecretFile`).
+  const secret = process.env.GROK_AGENT_SECRET || (await readSecretFile(secretFile)) || '';
   const piTools: PiToolPolicy = process.env.PI_GROK_PI_TOOLS ? parsePolicy(process.env.PI_GROK_PI_TOOLS) : settings.piTools ?? 'extensions';
   const hooks: HookSettings = { ...settings.hooks };
   if (process.env.PI_GROK_STOP_CHECK) hooks.stopCheck = process.env.PI_GROK_STOP_CHECK;
