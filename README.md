@@ -25,7 +25,7 @@ The tool gates are not an operating-system sandbox.
 | Node.js and npm | Node.js 22.19 or later is Pi's minimum. This package is tested only on 26.10.0. |
 | [Pi](https://github.com/earendil-works/pi#quick-start) | Tested with 0.87.1. Other versions are untested. |
 | [Grok Build CLI](https://docs.x.ai/build/overview) | `grok` on `PATH`, or its path in `PI_GROK_BINARY`. |
-| Grok login | Run `grok login` before the first start. This package has no login flow. It uses Grok's cached token when Grok offers the `cached_token` method. |
+| Grok login | Run `/grok login` in Pi, or `grok login` in a terminal. Both use Grok's own sign-in, and Grok keeps the credential in `~/.grok/auth.json`. Pi's `/login` xAI entry is a separate login and does not sign in Grok Build. |
 | Free local port | `127.0.0.1:2419`, or another loopback port in `GROK_ACP_URL`. |
 | Optional | A terminal with inline image support. ImageMagick 7 (`magick`) to show JPEG, WebP, and GIF images inline. PNG needs no converter. |
 

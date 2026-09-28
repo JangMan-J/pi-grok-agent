@@ -225,3 +225,16 @@ test('auto-start: an open with nothing listening starts the bundled gateway deta
   process.kill(gatewayPid, 'SIGINT');
   await until(() => !alive(gatewayPid) && !alive(leaderPid), 'gateway and its leader stop together');
 });
+
+test('a signed-out Grok fails the turn with a pointer to /grok login, and the next open checks again', async (t) => {
+  const s = scratch(); t.after(s.cleanup);
+  const port = await freePort();
+  const gw = startGateway(gatewayEnv(s, port, { FAKE_GROK_LOGGED_OUT: '1' }));
+  t.after(() => stop(gw.child));
+  await gw.ready();
+  const connection = new GrokModelConnection({ url: `ws://127.0.0.1:${port}/ws`, secret: SECRET });
+  t.after(() => connection.close());
+  await assert.rejects(connection.open(), /not signed in\. Run \/grok login/);
+  assert.equal(connection.isOpen, false, 'the connection is dropped, so the turn after a login initializes again');
+  await assert.rejects(connection.open(), /not signed in/, 'a second open asks Grok again instead of reusing a stale answer');
+});

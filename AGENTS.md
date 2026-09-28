@@ -32,6 +32,7 @@ For an isolated gateway, set all three: `PI_GROK_LEADER_SOCKET` to a new socket 
 | `src/model/permissions.ts`, `questions.ts` | Grok permission prompts and `ask_user_question` as Pi dialogs |
 | `src/model/steer.ts` | Mid-turn Enter to `_x.ai/interject` |
 | `src/config.ts` | `~/.pi/agent/grok-ws.json`, environment overrides, guard validation. A missing secret file is not a load error: Pi exits on any extension load failure |
+| `src/login.ts` | `/grok login`: runs `grok login --device-auth`, parses the URL and code. Grok stores the credential; Pi stores nothing. A signed-out Grok offers no `cached_token` method, and `connection.ts` then drops the connection with a pointer to `/grok login` |
 | `src/launch.ts` | Gateway auto-start: when nothing listens on the loopback endpoint, spawn this install's gateway detached (`dist/` under `node_modules`, else `scripts/server.ts`) and wait for its port |
 | `scripts/server.ts` | Gateway: leader supervision, stdio bridge per socket, bearer auth, MCP relay at `/mcp/<token>`, `ReverseRequestGuard` (one guarded lifetime per hook, permission prompt, or question: ack tiers, one answer per request, fail closed on disconnect) |
 

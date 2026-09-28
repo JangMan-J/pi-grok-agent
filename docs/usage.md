@@ -90,6 +90,7 @@ The steer handler acts only while the active model is `grok/*`. After a switch t
 
 | Command | Effect |
 | --- | --- |
+| `/grok login` | Runs `grok login --device-auth` in the background and shows the URL and code as an entry and a notice. Grok may open the page itself, in your default browser. Approve it there; Pi reports when the login finished. Works before any Grok session exists. A running gateway picks up the new login on the next turn, without a restart. |
 | `/grok debug` | Shows the gateway URL and connection state, the Grok session ID, Grok mode, Pi permission mode, Grok context size, usage and cost totals, lent tools, and hook decision counts. |
 | `/grok perms` | Shows the Pi permission mode. |
 | `/grok perms auto` | Default. Mirrors the Pi session's tools onto Grok's tools. |
@@ -371,6 +372,7 @@ Sanitized results from the run recorded in [launch-verification.md](launch-verif
 | Gateway exits with `EADDRINUSE` | The port is in use. The gateway binds its port before it starts or adopts a leader, so the other gateway keeps running. See [Run a second, isolated gateway](#run-a-second-isolated-gateway). |
 | `The local launcher requires a loopback ws:// endpoint ending in /ws.` | The gateway URL is not local. The gateway serves loopback only. |
 | `Grok leader socket startup timed out.` or `Grok leader exited before startup.` | Check `grok --version`, `grok login`, and `PI_GROK_BINARY`. |
+| `Grok Build is not signed in. Run /grok login, ...` | Grok has no stored login. Run `/grok login` and approve the code, then send the message again. Pi's `/login` xAI entry does not sign in Grok Build: Grok authenticates agent sessions only with its own stored login, and `XAI_API_KEY` does not replace it. |
 | `Grok connection dropped mid-turn (…)` | The gateway or leader restarted. Send the message again. |
 | `No Grok session yet. Send a message first.` | `/grok plan`, `goal`, and `compact` need a Grok session. Send one prompt first. |
 | Headless Pi ends the turn after a permission prompt | The default `headlessPermissions` is `dialog`, which cancels. Set `deny`, `reads`, or `allow`. |

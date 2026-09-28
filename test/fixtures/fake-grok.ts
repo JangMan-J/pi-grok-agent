@@ -28,7 +28,12 @@ if (args.includes('leader')) {
     let message: Record<string, unknown>;
     try { message = JSON.parse(line); } catch { return; }
     if (message.method === 'test/emit') { send(message.params); return; }
-    if (message.method === 'initialize') { send({ jsonrpc: '2.0', id: message.id, result: { protocolVersion: 1, agentCapabilities: {}, authMethods: [] } }); return; }
+    // Signed in, Grok offers cached_token. FAKE_GROK_LOGGED_OUT=1 offers only the interactive method, as a real logged-out Grok does.
+    if (message.method === 'initialize') {
+      const authMethods = process.env.FAKE_GROK_LOGGED_OUT === '1' ? [{ id: 'grok.com', name: 'Grok' }] : [{ id: 'cached_token', name: 'Cached token' }];
+      send({ jsonrpc: '2.0', id: message.id, result: { protocolVersion: 1, agentCapabilities: {}, authMethods } }); return;
+    }
+    if (message.method === 'authenticate') { send({ jsonrpc: '2.0', id: message.id, result: {} }); return; }
     if (message.method === 'session/new') { send({ jsonrpc: '2.0', id: message.id, result: { sessionId: 'fake-session' } }); return; }
     if (message.method === 'session/load') { send({ jsonrpc: '2.0', id: message.id, result: {} }); return; }
     if ('id' in message && ('result' in message || 'error' in message)) { if (log) appendFileSync(log, line + '\n'); return; }

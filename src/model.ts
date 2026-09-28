@@ -7,6 +7,7 @@ import { existsSync, mkdirSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { extname, join } from 'node:path';
 import { agentDir, readConfig } from './config.ts';
+import { grokLogin } from './login.ts';
 import { permissionAnswer, permissionDialog } from './model/permissions.ts';
 import { questionAnswerer } from './model/questions.ts';
 import { GrokModelConnection } from './model/connection.ts';
@@ -209,9 +210,10 @@ export default async function grokModel(pi: ExtensionAPI) {
     goal: { description: '(<objective> | status | pause | resume | clear)', args: [{ value: 'status', description: 'current goal' }, { value: 'pause', description: '' }, { value: 'resume', description: '' }, { value: 'clear', description: '' }] },
     compact: { description: '(note)', args: [] },
     debug: { description: '(brilliant information)', args: [] },
+    login: { description: 'sign in to Grok Build (device code)', args: [] },
   };
   pi.registerCommand('grok', {
-    description: 'perms | plan | goal | compact | debug',
+    description: 'login | perms | plan | goal | compact | debug',
     getArgumentCompletions: (prefix) => {
       const [head, ...rest] = prefix.split(/\s+/);
       if (rest.length === 0) {
@@ -231,6 +233,17 @@ export default async function grokModel(pi: ExtensionAPI) {
       const show = (title: string, body: string) => pi.appendEntry(COMMAND_ENTRY, { title, body });
       try {
         if (!verb) return;
+        if (verb === 'login') {
+          // Runs in the background: approval in the browser can take minutes, and Pi's input stays free meanwhile.
+          void grokLogin(({ url, code }) => {
+            show('Grok login', `Open ${url}\nConfirm the code ${code}. Grok may open the page itself.`);
+            ctx.ui.notify(`Grok login: confirm code ${code} at ${url}`, 'info');
+          }).then(
+            () => ctx.ui.notify('Grok login: signed in. Send your message again.', 'info'),
+            (error) => ctx.ui.notify(error instanceof Error ? error.message : String(error), 'error'),
+          );
+          return;
+        }
         if (!session) throw new Error('No Grok model session. Select a grok/* model first.');
         switch (verb) {
           case 'debug': {

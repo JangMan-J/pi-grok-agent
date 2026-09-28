@@ -157,6 +157,12 @@ export class GrokModelConnection {
       });
       if ((this.initialized.authMethods ?? []).some((m) => m.id === 'cached_token')) {
         await agent.request('authenticate', { methodId: 'cached_token' });
+      } else {
+        // Grok offers `cached_token` only with a stored login. Drop this connection so the turn after a login
+        // initializes again and sees the new credential.
+        this.socket?.close();
+        this.markDropped('Grok Build is not signed in');
+        throw new Error('Grok Build is not signed in. Run /grok login, approve the code in your browser, then send the message again.');
       }
     })().finally(() => { this.opening = undefined; });
     return this.opening;
