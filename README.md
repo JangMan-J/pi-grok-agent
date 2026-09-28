@@ -47,6 +47,8 @@ Start the gateway in its own terminal and keep it open:
 npm run server
 ```
 
+The same gateway is the package's `pi-grok-gateway` command (`npx pi-grok-gateway` from the clone). It runs in any directory, so you do not need the checkout as the working directory. Nothing starts it for you: the extension only reads the secret the gateway creates.
+
 When the gateway is ready, it prints a line that starts with `Grok WebSocket ACP ready at ws://127.0.0.1:2419/ws`.
 The first start creates the shared secret `~/.pi/agent/grok-ws.secret` with mode 0600.
 

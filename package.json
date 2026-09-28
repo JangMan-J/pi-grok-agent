@@ -29,6 +29,9 @@
   "engines": {
     "node": ">=22.19.0"
   },
+  "bin": {
+    "pi-grok-gateway": "scripts/server.ts"
+  },
   "pi": {
     "extensions": [
       "./src/model.ts"

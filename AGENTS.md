@@ -10,7 +10,7 @@ Scripts are in `package.json`. Run `npm install` once before any check. The `pi`
 
 - `npm run check`: type check (`tsc --noEmit`).
 - `npm test`: unit tests in `test/`, with mocks only, plus `test/gateway.test.ts`, which runs the real gateway against `test/fixtures/fake-grok.ts` in a scratch `HOME`. Nothing contacts Grok.
-- `npm run server`: the gateway plus a dedicated Grok leader, on `127.0.0.1:2419` by default.
+- `npm run server`: the gateway plus a dedicated Grok leader, on `127.0.0.1:2419` by default. The same script is the package `bin` `pi-grok-gateway` and runs from any working directory. Nothing starts it automatically.
 - `npm run test:live` and the scripts in `scripts/`: live probes. They use the current Grok login and spend model usage. Run them only when the user asks. They write to `evidence/`. Create that directory first. It is not in `.gitignore`, so sanitize results before a commit (gate G7 in `docs/launch.md`). `scripts/reconnect-probe.ts` hardcodes port 2419 and `~/.pi/agent/grok-ws.pid` and stops that gateway, so it never runs isolated.
 
 ## Gateway ownership

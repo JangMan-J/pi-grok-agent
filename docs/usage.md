@@ -43,7 +43,7 @@ The README uses a clone, `npm install --omit=dev`, and `pi install .` or `pi -e 
 
 Pi does not install dependencies for a local path. It loads the directory in place. Run `npm install --omit=dev` in the clone before the first start. Pi runs the same `npm install --omit=dev` when it installs a git source.
 
-A git install (`pi install git:github.com/JangMan-J/pi-grok-agent`) is not tested. It would still need a checkout of the same version to run `npm run server`. Use the clone.
+A git install (`pi install git:github.com/JangMan-J/pi-grok-agent`) is not tested. It would still need a way to run the gateway of the same version: `npm run server` in a checkout, or the `pi-grok-gateway` bin from `npm install -g <path-or-tarball>`. Pi does not put a package's `bin` on `PATH`. Use the clone.
 
 ## Models and Pi controls
 
