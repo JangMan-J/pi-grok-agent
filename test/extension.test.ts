@@ -54,3 +54,22 @@ test('registered input handler leaves other models alone after a Grok session', 
   assert.equal(entries.length, 1, 'do not consume or record another model’s steering input');
   assert.deepEqual(await input(steer, ctx), { action: 'handled' }, 'switching back still steers Grok');
 });
+
+test('the extension loads without the gateway secret file; the secret is read at connect time', async (t) => {
+  const dir = await mkdtemp(join(tmpdir(), 'pi-grok-extension-nosecret-'));
+  const oldSecret = process.env.GROK_AGENT_SECRET;
+  delete process.env.GROK_AGENT_SECRET;
+  t.after(async () => {
+    if (oldSecret !== undefined) process.env.GROK_AGENT_SECRET = oldSecret;
+    await rm(dir, { recursive: true, force: true });
+  });
+  const { default: grokModel } = await import('../src/model.ts');
+  const { defaultSecretFile } = await import('../src/config.ts');
+  await rm(defaultSecretFile, { force: true });
+  let provider: unknown;
+  const pi = {
+    on() {}, registerProvider: (...args: unknown[]) => { provider = args; }, registerMessageRenderer() {}, registerEntryRenderer() {}, registerCommand() {}, appendEntry() {},
+  } as unknown as ExtensionAPI;
+  await grokModel(pi); // Pi exits on any extension load error, so this must not throw
+  assert.ok(provider, 'the grok provider is registered even though no secret exists yet');
+});

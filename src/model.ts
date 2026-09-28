@@ -52,7 +52,7 @@ function oneLine(value: unknown, limit: number): string {
 
 export default async function grokModel(pi: ExtensionAPI) {
   const config = await readConfig();
-  const connection = new GrokModelConnection({ url: config.url, secret: config.secret });
+  const connection = new GrokModelConnection({ url: config.url, secret: config.secret, secretFile: config.secretFile });
   let current: GrokModelSession | undefined;
   let permissionMode: 'yolo' | 'auto' | 'ask' | 'readonly' = 'auto';
   // Media generated during a turn; flushed as one `grok-media` message after the turn so Pi renders the images
