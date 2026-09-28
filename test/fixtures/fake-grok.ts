@@ -1,0 +1,41 @@
+#!/usr/bin/env node
+// A stand-in for the Grok Build binary, for gateway tests that must not spend Grok usage.
+// Select it with PI_GROK_BINARY. Two modes, matching the argument shapes scripts/server.ts uses:
+//   ... agent leader --leader-socket <path>   hold the leader socket and write <path minus .sock>.lock with this pid
+//   ... agent --leader stdio ...              JSON-RPC over stdio: answers initialize and session/new, emits any
+//                                             message sent as a `test/emit` notification, and appends every
+//                                             response it receives to FAKE_GROK_LOG (one JSON line each)
+import { appendFileSync, unlinkSync, writeFileSync } from 'node:fs';
+import { createServer } from 'node:net';
+import { createInterface } from 'node:readline';
+
+const args = process.argv.slice(2);
+const socketPath = args[args.indexOf('--leader-socket') + 1] ?? '';
+
+if (args.includes('leader')) {
+  const lock = socketPath.replace(/\.sock$/, '') + '.lock';
+  const server = createServer((socket) => socket.end());
+  server.listen(socketPath, () => writeFileSync(lock, `${process.pid}\n`));
+  const stop = () => { server.close(); try { unlinkSync(socketPath); } catch { /* already gone */ } process.exit(143); };
+  process.on('SIGTERM', stop);
+  process.on('SIGINT', stop);
+  setInterval(() => {}, 60_000); // stay alive until signalled
+} else if (args.includes('stdio')) {
+  const log = process.env.FAKE_GROK_LOG;
+  const send = (message: unknown) => process.stdout.write(JSON.stringify(message) + '\n');
+  const lines = createInterface({ input: process.stdin });
+  lines.on('line', (line) => {
+    let message: Record<string, unknown>;
+    try { message = JSON.parse(line); } catch { return; }
+    if (message.method === 'test/emit') { send(message.params); return; }
+    if (message.method === 'initialize') { send({ jsonrpc: '2.0', id: message.id, result: { protocolVersion: 1, agentCapabilities: {}, authMethods: [] } }); return; }
+    if (message.method === 'session/new') { send({ jsonrpc: '2.0', id: message.id, result: { sessionId: 'fake-session' } }); return; }
+    if (message.method === 'session/load') { send({ jsonrpc: '2.0', id: message.id, result: {} }); return; }
+    if ('id' in message && ('result' in message || 'error' in message)) { if (log) appendFileSync(log, line + '\n'); return; }
+    if ('id' in message && message.id != null) send({ jsonrpc: '2.0', id: message.id, error: { code: -32601, message: `fake grok does not implement ${String(message.method)}` } });
+  });
+  lines.on('close', () => process.exit(0));
+} else {
+  console.error(`fake grok: unsupported arguments ${args.join(' ')}`);
+  process.exit(2);
+}

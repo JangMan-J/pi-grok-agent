@@ -15,8 +15,11 @@ export interface SessionHandlers {
   /** Answer one MCP JSON-RPC message from Grok. Return the JSON-RPC `result` or throw for an error. */
   onMcp(message: SdkCall): Promise<unknown>;
   onPermission?(request: RequestPermissionRequest): Promise<RequestPermissionResponse>;
-  /** Blocking client hook (`_x.ai/hooks/run`): pre_tool_use, post_tool_use, stop. */
-  onHookRun?(payload: any): Promise<Record<string, unknown>>;
+  /**
+   * Blocking client hook (`_x.ai/hooks/run`): pre_tool_use, post_tool_use, stop. `gate.dialog()` tells the gateway a
+   * human is deciding, so it waits the dialog window instead of the short policy window before answering for Pi.
+   */
+  onHookRun?(payload: any, gate?: { dialog(): void }): Promise<Record<string, unknown>>;
   /** Passive client hook notification (`_x.ai/hooks/event`). */
   onHookEvent?(payload: any): void;
   /** Grok's ask_user_question (`_x.ai/ask_user_question`). Default: cancelled. */
@@ -95,7 +98,7 @@ export class GrokModelConnection {
           const event = String(params.hookEventName ?? '');
           const key = event === 'stop' ? `stop:${params.sessionId ?? params.session_id ?? ''}` : `${event}:${params.toolUseId ?? ''}`;
           this.ack(key, { check: event === 'post_tool_use' || event === 'stop' });
-          return handler ? handler(params) : { decision: 'continue' };
+          return handler ? handler(params, { dialog: () => this.ack(key, { dialog: true }) }) : { decision: 'continue' };
         })
         .onNotification('_x.ai/session_notification', (raw) => raw as any, ({ params }) => {
           this.sessions.get(params.sessionId ?? params.session_id)?.onSessionExt?.(params.update);
@@ -140,7 +143,8 @@ export class GrokModelConnection {
 
   /**
    * Tell the gateway Pi is alive and what it is doing with a reverse request (`pi/gate-ack`).
-   * The gateway consumes this; it never reaches Grok. Missing acks make the gateway fail closed.
+   * The gateway consumes this; it never reaches Grok. Missing acks make the gateway fail closed. A later ack for
+   * the same key moves the request to that tier's deadline (for example a hook that turns into a dialog).
    */
   private ack(key: string, state: { dialog?: boolean; check?: boolean }) {
     void this.connection?.agent.notify('pi/gate-ack', { key, ...state }).catch(() => {});

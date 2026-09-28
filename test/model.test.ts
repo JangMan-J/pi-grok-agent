@@ -192,3 +192,42 @@ test('abort then immediate new message: no TDZ, no stale completion, second turn
   assert.equal(e2.at(-1).reason, 'stop');
   assert.equal(e2.at(-1).message.content.find((c: any) => c.type === 'text')?.text, 'second');
 });
+
+test('/grok command timeout cancels on Grok and frees the session for the next turn; the late reply is dropped', async () => {
+  const fake = fakeConnection();
+  const session = new GrokModelSession(fake.connection, 'pi-cmd', '/repo');
+  await session.attach(undefined);
+  const command = session.runCommand('/goal status', 30);
+  await new Promise<void>((r) => { const i = setInterval(() => { if (fake.calls.some((c) => c.method === 'session/prompt')) { clearInterval(i); r(); } }, 5); });
+  fake.handlers().onUpdate({ sessionId: 'g1', update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'thinking about it' } } } as any);
+  await assert.rejects(command, /timed out after 0\.03s/);
+  assert.equal(session.promptActive, false, 'the session is free');
+  assert.ok(fake.calls.some((c) => c.method === 'session/cancel'), 'the command prompt was cancelled on Grok');
+
+  // The next normal turn starts at once; the timed-out command's late completion does not bleed into it.
+  const stream = createGrokStream(fake.connection, { current: () => session, piTools: 'none' });
+  const s2 = stream(model, normalizeContext({ systemPrompt: 'You are Pi.', tools: [], messages: [{ role: 'user', content: 'hello', timestamp: 1 }] }), {});
+  await new Promise<void>((r) => { const i = setInterval(() => { if (fake.calls.filter((c) => c.method === 'session/prompt').length === 2) { clearInterval(i); r(); } }, 5); });
+  fake.finishPromptAt(0, 'end_turn'); // late completion of the cancelled command
+  fake.handlers().onUpdate({ sessionId: 'g1', update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'hi' } } } as any);
+  fake.finishPromptAt(1, 'end_turn');
+  const events = await collect(s2);
+  assert.equal(events.at(-1).type, 'done');
+  assert.equal(events.at(-1).message.content[0].text, 'hi');
+  assert.equal(fake.calls.filter((c) => c.method === 'session/prompt')[1]!.params.prompt[0].text, 'hello');
+});
+
+test('/grok command completes through the shared prompt lifetime: text collected, busy while running, free after', async () => {
+  const fake = fakeConnection();
+  const session = new GrokModelSession(fake.connection, 'pi-cmd2', '/repo');
+  await session.attach(undefined);
+  const command = session.runCommand('/compact');
+  await new Promise<void>((r) => { const i = setInterval(() => { if (fake.calls.some((c) => c.method === 'session/prompt')) { clearInterval(i); r(); } }, 5); });
+  assert.equal(session.promptActive, true);
+  await assert.rejects(session.runCommand('/goal status'), /busy with a turn/);
+  fake.handlers().onUpdate({ sessionId: 'g1', update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'Compacted 3 turns.' } } } as any);
+  fake.finishPrompt('end_turn');
+  assert.deepEqual(await command, { text: 'Compacted 3 turns.', stopReason: 'end_turn' });
+  assert.equal(session.promptActive, false);
+  assert.equal(fake.calls.filter((c) => c.method === 'session/cancel').length, 0, 'a completed command is not cancelled');
+});

@@ -4,10 +4,31 @@
   "license": "Apache-2.0",
   "private": true,
   "type": "module",
-  "description": "Grok Build as a first-class Pi model over WebSocket ACP",
+  "description": "Pi model provider for Grok Build: Grok keeps its native harness and tools while Pi drives the session over a local WebSocket ACP gateway",
   "keywords": [
-    "pi-package"
+    "pi-package",
+    "pi",
+    "pi-coding-agent",
+    "pi-extension",
+    "model-provider",
+    "grok",
+    "grok-build",
+    "xai",
+    "acp",
+    "agent-client-protocol",
+    "coding-agent"
   ],
+  "homepage": "https://github.com/JangMan-J/pi-grok-agent#readme",
+  "bugs": {
+    "url": "https://github.com/JangMan-J/pi-grok-agent/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/JangMan-J/pi-grok-agent.git"
+  },
+  "engines": {
+    "node": ">=22.19.0"
+  },
   "pi": {
     "extensions": [
       "./src/model.ts"

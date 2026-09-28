@@ -78,8 +78,9 @@ export class GrokModelSession {
   /**
    * Pi-side permission mode for Grok's native tools, applied at pre_tool_use (so it holds even where Grok's own
    * rules would auto-allow): `auto` = capability mirror only; `readonly` = deny writes and shell regardless of Pi's
-   * tools; `ask` = mirror, then a Pi dialog for every write or shell call; `yolo` = allow everything, no mirror,
-   * no dialogs (for autonomous work). Headless Pi treats `ask` as `readonly`.
+   * tools; `ask` = mirror, then a Pi dialog for every write or shell call; `yolo` = mirror as if Pi had read, edit,
+   * write, and bash, with no Pi dialog. `denyGrokTools` and Grok's own permission prompts still apply in every
+   * mode. Headless Pi treats `ask` as `readonly`.
    */
   permissionMode: 'yolo' | 'auto' | 'ask' | 'readonly' = 'auto';
   /** Dialog used by `ask` mode; set by the extension when Pi has a UI. */
@@ -137,7 +138,7 @@ export class GrokModelSession {
     const { sessionId } = await this.connection.attachSession({
       sessionId: this.grokSessionId, cwd: this.cwd, serverId: this.serverId, serverName: 'pi', rules,
       offerPiTools: this.tools.length > 0, grokMode: this.grokMode,
-      handlers: { onUpdate: (n) => this.onUpdate(n), onMcp: (m) => this.onMcp(m), onPermission: (r) => this.permission(r), onHookRun: (p) => this.onHookRun(p), onHookEvent: (p) => { void this.onHookRun(p); }, onQuestion: (q) => this.ask(q), onSessionExt: (u) => this.onSessionExt(u) },
+      handlers: { onUpdate: (n) => this.onUpdate(n), onMcp: (m) => this.onMcp(m), onPermission: (r) => this.permission(r), onHookRun: (p, gate) => this.onHookRun(p, gate), onHookEvent: (p) => { void this.onHookRun(p); }, onQuestion: (q) => this.ask(q), onSessionExt: (u) => this.onSessionExt(u) },
     });
     this.grokSessionId = sessionId;
     this.attachedGeneration = this.connection.generation;
@@ -179,7 +180,7 @@ export class GrokModelSession {
     const seq = ++this.promptSeq;
     const promise = this.connection.agent.request<PromptResponse>('session/prompt', { sessionId: this.grokSessionId, prompt: [{ type: 'text', text }] });
     this.activePrompt = promise;
-    promise.then(
+    return promise.then(
       (response) => {
         if (seq !== this.promptSeq) return; // superseded: a newer prompt owns the consumer
         this.activePrompt = undefined;
@@ -187,8 +188,9 @@ export class GrokModelSession {
         const contextTokens = (response as { _meta?: { totalTokens?: unknown } })._meta?.totalTokens;
         if (typeof contextTokens === 'number') { this.lastContextTokens = contextTokens; if (usage) usage.contextTokens = contextTokens; }
         this.emit({ kind: 'complete', response, usage });
+        return response;
       },
-      (error) => { if (seq !== this.promptSeq) return; this.activePrompt = undefined; this.emit({ kind: 'error', error: error instanceof Error ? error : new Error(String(error)) }); },
+      (error) => { if (seq !== this.promptSeq) return undefined; this.activePrompt = undefined; this.emit({ kind: 'error', error: error instanceof Error ? error : new Error(String(error)) }); return undefined; },
     );
   }
 
@@ -255,14 +257,20 @@ export class GrokModelSession {
     if (!this.grokSessionId) throw new Error('No Grok session yet. Send a message first.');
     if (this.activePrompt) throw new Error('Grok is busy with a turn. Wait for it to finish.');
     let out = '';
-    const detach = this.consume((event) => { if (event.kind === 'text') out += event.delta; });
+    let outcome: Extract<TurnEvent, { kind: 'complete' | 'error' }> | undefined;
+    const detach = this.consume((event) => { if (event.kind === 'text') out += event.delta; else if (event.kind === 'complete' || event.kind === 'error') outcome = event; });
+    let timer: ReturnType<typeof setTimeout> | undefined;
     try {
-      const promise = this.connection.agent.request<PromptResponse>('session/prompt', { sessionId: this.grokSessionId, prompt: [{ type: 'text', text }] });
-      this.activePrompt = promise;
-      const timer = new Promise<never>((_, reject) => setTimeout(() => reject(new Error(`Grok command timed out after ${timeoutMs / 1000}s.`)), timeoutMs).unref?.());
-      const response = await Promise.race([promise, timer]);
-      return { text: out.trim(), stopReason: response.stopReason };
-    } finally { this.activePrompt = undefined; detach(); }
+      // Same lifetime as a normal turn: startPrompt owns busy state, completion, and late-completion suppression.
+      const timeout = new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error(`Grok command timed out after ${timeoutMs / 1000}s.`)), timeoutMs); timer.unref?.(); });
+      await Promise.race([this.startPrompt(text), timeout]);
+      if (!outcome) throw new Error('Grok command ended without a completion.');
+      if (outcome.kind === 'error') throw outcome.error;
+      return { text: out.trim(), stopReason: outcome.response.stopReason };
+    } catch (error) {
+      this.abandonPrompt(); // timeout or failure: cancel on Grok and free the session, as a Pi abort does
+      throw error;
+    } finally { clearTimeout(timer); detach(); }
   }
 
   /** Feed Pi tool results back to Grok's parked tools/call requests. Returns ids that had no parked call. */
@@ -333,7 +341,7 @@ export class GrokModelSession {
   }
 
   /** Blocking client hooks: gate native tools by Pi capability, annotate edits, and hold the stop. */
-  async onHookRun(payload: HookRun): Promise<HookReply> {
+  async onHookRun(payload: HookRun, gate?: { dialog(): void }): Promise<HookReply> {
     try {
       switch (payload.hookEventName) {
         case 'pre_tool_use': {
@@ -346,6 +354,7 @@ export class GrokModelSession {
           const kind = classify(tool, stamp);
           const needsDialog = this.permissionMode === 'ask' && kind !== 'read' && kind !== 'other';
           if (verdict.allow && needsDialog && this.askDialog) {
+            gate?.dialog(); // a human is deciding: the gateway waits the dialog window, not the policy window
             const ok = await this.askDialog(tool, payload.toolInput);
             if (!ok) verdict = { allow: false, reason: `The user declined ${tool}.` };
           }

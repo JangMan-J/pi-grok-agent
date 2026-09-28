@@ -158,10 +158,16 @@ export default async function grokModel(pi: ExtensionAPI) {
       return connection.agent.request('_x.ai/interject', { sessionId: session.grokSessionId, text });
     },
     record: (text) => pi.appendEntry('grok-steer', { text }),
-    notify: (text) => { try { lastCtx?.ui.notify(text, 'error'); } catch {} },
+    notify: (text) => {
+      try { lastCtx?.ui.notify(text, 'error'); }
+      catch (error) { console.error('Could not display Grok steering notification:', error); }
+    },
   });
   let lastCtx: ExtensionContext | undefined;
-  pi.on('input', (event) => steer(event));
+  pi.on('input', (event, ctx) => {
+    if (ctx.model?.provider !== 'grok') return;
+    return steer(event);
+  });
 
   pi.registerEntryRenderer<{ text: string }>('grok-steer', (entry, _opts, theme) => {
     if (!entry.data) return undefined;
@@ -198,7 +204,7 @@ export default async function grokModel(pi: ExtensionAPI) {
   // Two-level completion: the subcommand, then its arguments. Pi passes everything typed after "/grok ".
   // The first-level descriptions are the lines that used to print above the editor. They stay in the menu under it.
   const COMPLETIONS: Record<string, { args: { value: string; description: string }[]; description: string }> = {
-    perms: { description: '(yolo | auto | ask | read-only)', args: [{ value: 'yolo', description: 'allow everything, no dialogs' }, { value: 'auto', description: 'mirror Pi\'s tool set' }, { value: 'ask', description: 'confirm each edit or shell call' }, { value: 'read-only', description: 'deny edits and shell' }] },
+    perms: { description: '(yolo | auto | ask | read-only)', args: [{ value: 'yolo', description: 'expand Pi capabilities; Grok rules still apply' }, { value: 'auto', description: 'mirror Pi\'s tool set' }, { value: 'ask', description: 'confirm each edit or shell call' }, { value: 'read-only', description: 'deny edits and shell' }] },
     plan: { description: '(on | off)', args: [{ value: 'on', description: 'enter plan mode' }, { value: 'off', description: 'leave plan mode' }] },
     goal: { description: '(<objective> | status | pause | resume | clear)', args: [{ value: 'status', description: 'current goal' }, { value: 'pause', description: '' }, { value: 'resume', description: '' }, { value: 'clear', description: '' }] },
     compact: { description: '(note)', args: [] },

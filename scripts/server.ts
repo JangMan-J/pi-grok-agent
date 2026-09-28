@@ -22,7 +22,7 @@ const config = await readConfig();
 // token (as an _x.ai/mcp/sdk_call request), so the stock leader is never asked to route it.
 const MCP_PATH = '/mcp/';
 const GATEWAY_ID_PREFIX = 'pi-gw:';
-type Relay = { socket: WebSocket; pending: Map<string, ServerResponse>; tokens: Set<string>; gates: Map<string, Gate>; gateKeys: Map<string, string> };
+type Relay = { socket: WebSocket; pending: Map<string, ServerResponse>; tokens: Set<string>; guard: ReverseRequestGuard };
 
 // Tiered fail-closed guard for Grok's reverse requests. Grok fails OPEN when a client hook times out (the tool
 // runs) and waits forever on a permission prompt, so the gateway answers on Pi's behalf when Pi cannot.
@@ -36,8 +36,8 @@ type Relay = { socket: WebSocket; pending: Map<string, ServerResponse>; tokens: 
 // PI_GROK_CHECK_BUDGET_MS, PI_GROK_DIALOG_MS override). `readConfig` validates them against Grok's deadlines.
 const { ackMs: ACK_MS, policyMs: POLICY_MS, checkBudgetMs: CHECK_BUDGET_MS, dialogMs: DIALOG_MS } = config.guard;
 type GateKind = 'gate' | 'feedback' | 'permission';
-type Gate = { kind: GateKind; acked: boolean; timer?: ReturnType<typeof setTimeout>; answer(why: string): void };
-/** Content key both sides can derive from the payload (Pi's handlers never see the JSON-RPC id). */
+type Gate = { key?: string; kind: GateKind; state: 'open' | 'answered'; timer?: ReturnType<typeof setTimeout>; answer(why: string): void };
+/** Content key both sides derive from the payload (Pi's handlers never see the JSON-RPC id); Pi's ack names it. */
 function gateKey(message: any): string | undefined {
   const p = message?.params ?? {};
   if (message?.method === '_x.ai/hooks/run') {
@@ -49,56 +49,76 @@ function gateKey(message: any): string | undefined {
   if (message?.method === '_x.ai/ask_user_question') return `ask:${p.toolCallId ?? p.tool_call_id ?? ''}`;
   return undefined;
 }
-const guardStats = { gateDenied: 0, feedbackContinued: 0, permissionRejected: 0 };
-function arm(relay: Relay, id: string, gate: Gate, ms: number, why: string) {
-  clearTimeout(gate.timer);
-  gate.timer = setTimeout(() => { if (relay.gates.delete(id)) gate.answer(why); }, ms);
-}
-function watchReverseRequest(relay: Relay, proxyStdin: NodeJS.WritableStream, message: any) {
-  if (typeof message?.method !== 'string' || !('id' in message) || message.id === null) return;
-  const id = JSON.stringify(message.id);
-  const reply = (result: unknown) => proxyStdin.write(JSON.stringify({ jsonrpc: '2.0', id: message.id, result }) + '\n');
-  let gate: Gate | undefined;
-  if (message.method === '_x.ai/hooks/run') {
-    const event = String(message.params?.hookEventName ?? '');
-    if (event === 'pre_tool_use') gate = { kind: 'gate', acked: false, answer: (why) => { guardStats.gateDenied++; reply({ decision: 'deny', reason: `Denied by the Pi gateway: ${why}.` }); } };
-    else if (event === 'stop' || event === 'post_tool_use') gate = { kind: 'feedback', acked: false, answer: () => { guardStats.feedbackContinued++; reply({ decision: 'continue' }); } };
-  } else if (message.method === 'session/request_permission') {
-    const options: any[] = message.params?.options ?? [];
-    const reject = options.find((o) => o?.kind === 'reject_once') ?? options.find((o) => String(o?.kind).startsWith('reject'));
-    gate = { kind: 'permission', acked: false, answer: () => { guardStats.permissionRejected++; reply(reject ? { outcome: { outcome: 'selected', optionId: reject.optionId } } : { outcome: { outcome: 'cancelled' } }); } };
-  } else if (message.method === '_x.ai/ask_user_question') {
-    // Grok waits up to 30 min for an answer; a vanished Pi must not leave the tool hanging. `cancelled` is a normal outcome.
-    gate = { kind: 'permission', acked: false, answer: () => { guardStats.permissionRejected++; reply({ outcome: 'cancelled' }); } };
+const guardStats = { gateDenied: 0, feedbackContinued: 0, permissionRejected: 0, lateAnswersDropped: 0 };
+/**
+ * One guarded lifetime per reverse request (hook, permission prompt, question) on one Pi connection.
+ * A gate opens when the request passes toward Pi and is armed at the ack tier. Pi's ack re-arms it for the tier
+ * Pi reports. Pi's answer settles it and is forwarded. When the deadline passes or Pi is gone, the gateway
+ * answers instead, and a later answer from Pi is dropped: Grok sees exactly one response per request id.
+ */
+class ReverseRequestGuard {
+  private readonly gates = new Map<string, Gate>(); // JSON-RPC id (stringified) -> gate
+  private readonly byKey = new Map<string, string>(); // content key -> id
+  private readonly reply: (message: unknown) => void;
+  constructor(reply: (message: unknown) => void) { this.reply = reply; }
+  get open() { let n = 0; for (const g of this.gates.values()) if (g.state === 'open') n++; return n; }
+  /** A request from Grok on its way to Pi. Guarded methods get a gate; others pass through unguarded. */
+  watch(message: any) {
+    if (typeof message?.method !== 'string' || !('id' in message) || message.id === null) return;
+    const id = JSON.stringify(message.id);
+    const reply = (result: unknown) => this.reply({ jsonrpc: '2.0', id: message.id, result });
+    let gate: Gate | undefined;
+    if (message.method === '_x.ai/hooks/run') {
+      const event = String(message.params?.hookEventName ?? '');
+      if (event === 'pre_tool_use') gate = { kind: 'gate', state: 'open', answer: (why) => { guardStats.gateDenied++; reply({ decision: 'deny', reason: `Denied by the Pi gateway: ${why}.` }); } };
+      else if (event === 'stop' || event === 'post_tool_use') gate = { kind: 'feedback', state: 'open', answer: () => { guardStats.feedbackContinued++; reply({ decision: 'continue' }); } };
+    } else if (message.method === 'session/request_permission') {
+      const options: any[] = message.params?.options ?? [];
+      const reject = options.find((o) => o?.kind === 'reject_once') ?? options.find((o) => String(o?.kind).startsWith('reject'));
+      gate = { kind: 'permission', state: 'open', answer: () => { guardStats.permissionRejected++; reply(reject ? { outcome: { outcome: 'selected', optionId: reject.optionId } } : { outcome: { outcome: 'cancelled' } }); } };
+    } else if (message.method === '_x.ai/ask_user_question') {
+      // Grok waits up to 30 min for an answer; a vanished Pi must not leave the tool hanging. `cancelled` is a normal outcome.
+      gate = { kind: 'permission', state: 'open', answer: () => { guardStats.permissionRejected++; reply({ outcome: 'cancelled' }); } };
+    }
+    if (!gate) return;
+    gate.key = gateKey(message);
+    this.gates.set(id, gate);
+    if (gate.key) this.byKey.set(gate.key, id);
+    this.arm(id, gate, ACK_MS, `Pi did not acknowledge within ${ACK_MS / 1000}s`);
   }
-  if (!gate) return;
-  relay.gates.set(id, gate);
-  const key = gateKey(message);
-  if (key) relay.gateKeys.set(key, id);
-  arm(relay, id, gate, ACK_MS, `Pi did not acknowledge within ${ACK_MS / 1000}s`);
-}
-/** Pi's `pi/gate-ack` notification: Pi is alive and says what it is doing with the request. Re-arms the deadline. */
-function handleGateAck(relay: Relay, params: any) {
-  const id = relay.gateKeys.get(String(params?.key ?? ''));
-  const gate = id ? relay.gates.get(id) : undefined;
-  if (!id || !gate) return;
-  gate.acked = true;
-  if (params?.dialog) arm(relay, id, gate, DIALOG_MS, `no answer to the dialog within ${DIALOG_MS / 60_000} min`);
-  else if (params?.check) arm(relay, id, gate, CHECK_BUDGET_MS, `check exceeded ${CHECK_BUDGET_MS / 1000}s`);
-  else arm(relay, id, gate, POLICY_MS, `Pi policy did not answer within ${POLICY_MS / 1000}s`);
-}
-/** Pi answered a reverse request: stop guarding it. */
-function settleReverseAnswer(relay: Relay, message: any): void {
-  if (!message || !('id' in message) || !('result' in message || 'error' in message)) return;
-  const gate = relay.gates.get(JSON.stringify(message.id));
-  if (!gate) return;
-  relay.gates.delete(JSON.stringify(message.id));
-  for (const [key, id] of relay.gateKeys) if (id === JSON.stringify(message.id)) relay.gateKeys.delete(key);
-  clearTimeout(gate.timer);
-}
-function answerAllGates(relay: Relay, why: string) {
-  for (const [id, gate] of relay.gates) { relay.gates.delete(id); clearTimeout(gate.timer); gate.answer(why); }
-  relay.gateKeys.clear();
+  /** Pi's `pi/gate-ack`: Pi is alive and says what it is doing with the request. Re-arms the deadline for that tier. */
+  ack(params: any) {
+    const id = this.byKey.get(String(params?.key ?? ''));
+    const gate = id ? this.gates.get(id) : undefined;
+    if (!id || !gate || gate.state !== 'open') return;
+    if (params?.dialog) this.arm(id, gate, DIALOG_MS, `no answer to the dialog within ${DIALOG_MS / 60_000} min`);
+    else if (params?.check) this.arm(id, gate, CHECK_BUDGET_MS, `check exceeded ${CHECK_BUDGET_MS / 1000}s`);
+    else this.arm(id, gate, POLICY_MS, `Pi policy did not answer within ${POLICY_MS / 1000}s`);
+  }
+  /** Pi's answer: forward it when the gate is still open (or the request was never guarded); drop it when the gateway already answered. */
+  settle(message: any): 'forward' | 'drop' {
+    if (!message || !('id' in message) || !('result' in message || 'error' in message)) return 'forward';
+    const id = JSON.stringify(message.id);
+    const gate = this.gates.get(id);
+    if (!gate) return 'forward';
+    this.forget(id, gate);
+    if (gate.state === 'open') return 'forward';
+    guardStats.lateAnswersDropped++;
+    return 'drop';
+  }
+  /** Pi is gone: answer every open gate now. Answered gates stay until Pi's late reply (if any) is dropped. */
+  close(why: string) {
+    for (const [id, gate] of this.gates) if (gate.state === 'open') { clearTimeout(gate.timer); gate.state = 'answered'; gate.answer(why); this.forget(id, gate); }
+  }
+  private arm(id: string, gate: Gate, ms: number, why: string) {
+    clearTimeout(gate.timer);
+    gate.timer = setTimeout(() => { if (this.gates.get(id) === gate && gate.state === 'open') { gate.state = 'answered'; gate.answer(why); } }, ms);
+  }
+  private forget(id: string, gate: Gate) {
+    clearTimeout(gate.timer);
+    this.gates.delete(id);
+    if (gate.key && this.byKey.get(gate.key) === id) this.byKey.delete(gate.key);
+  }
 }
 const relays = new Map<string, Relay>(); // token -> owning Pi connection
 let gatewayIds = 0;
@@ -261,9 +281,10 @@ function shutdown(error?: Error) {
 }
 for (const signal of ['SIGTERM', 'SIGINT'] as const) process.on(signal, () => shutdown());
 
+// Startup order is ownership: bind the endpoint first, acquire a leader second. A launch that loses its port
+// exits before it has touched any leader, so it cannot stop one that belongs to another gateway. A leader this
+// launch spawns, or adopts once it holds the endpoint, is its own: shutdown stops it.
 try {
-  await startLeader(); // first start is fatal on failure: nothing to serve without a leader
-  if (stopping) throw new Error('Grok gateway startup cancelled.');
   httpServer = createServer(handleMcpHttp);
   httpServer.requestTimeout = 0; httpServer.headersTimeout = 60_000; // a relayed tools/call may wait on a Pi permission dialog
   gateway = new WebSocketServer({
@@ -271,15 +292,13 @@ try {
     verifyClient: ({ req }: { req: IncomingMessage }) => req.headers.authorization === `Bearer ${config.secret}`,
   });
   gateway.on('error', (error) => shutdown(error));
-  httpServer.on('error', (error) => shutdown(error));
-  httpServer.listen(Number(url.port || 80), url.hostname === '[::1]' ? '::1' : url.hostname, () => console.log(`Grok WebSocket ACP ready at ${url}; MCP relay at ${url.origin.replace(/^ws/, 'http')}${MCP_PATH}<token>; leader socket ${leaderSocket}; binary ${grokBinary}`));
   gateway.on('connection', async (socket) => {
     // A client arriving while the leader is being respawned waits briefly instead of getting a bridge that cannot connect.
     for (let i = 0; !leaderAlive() && !stopping && i < 100; i++) await new Promise((r) => setTimeout(r, 300));
     if (!leaderAlive() || stopping) { socket.close(1013, 'Grok leader unavailable'); return; }
     const proxy = spawn(grokBinary, ['--permission-mode', 'default', 'agent', '--leader', 'stdio', '--leader-socket', leaderSocket], { stdio: ['pipe', 'pipe', 'inherit'] });
     proxies.add(proxy);
-    const relay: Relay = { socket, pending: new Map(), tokens: new Set(), gates: new Map(), gateKeys: new Map() };
+    const relay: Relay = { socket, pending: new Map(), tokens: new Set(), guard: new ReverseRequestGuard((message) => proxy.stdin.write(JSON.stringify(message) + '\n')) };
     let buffer = '';
     const fail = () => { if (socket.readyState === WebSocket.OPEN) socket.close(1011, 'Grok leader client disconnected'); stopChild(proxy); };
     proxy.stdout.setEncoding('utf8');
@@ -290,7 +309,7 @@ try {
         const end = buffer.indexOf('\n'); if (end < 0) break;
         const line = buffer.slice(0, end).replace(/\r$/, ''); buffer = buffer.slice(end + 1);
         if (!line) continue;
-        try { watchReverseRequest(relay, proxy.stdin, JSON.parse(line)); } catch {}
+        try { relay.guard.watch(JSON.parse(line)); } catch { /* not JSON: pass the line through as is */ }
         if (socket.readyState === WebSocket.OPEN) socket.send(line, (error) => { if (error) fail(); });
       }
     });
@@ -300,8 +319,8 @@ try {
       let message: any;
       try { message = JSON.parse(text); } catch { message = undefined; }
       if (message && answerFromPi(relay, message)) return; // Pi answered a relayed MCP call; it never reaches the leader
-      if (message?.method === 'pi/gate-ack') { handleGateAck(relay, message.params); return; } // gateway-only; never reaches the leader
-      if (message) { settleReverseAnswer(relay, message); registerMcpTokens(relay, message); }
+      if (message?.method === 'pi/gate-ack') { relay.guard.ack(message.params); return; } // gateway-only; never reaches the leader
+      if (message) { if (relay.guard.settle(message) === 'drop') return; registerMcpTokens(relay, message); } // the gateway already answered: one response per id
       if (!proxy.stdin.write(text + '\n')) socket.pause();
     });
     proxy.stdin.on('drain', () => socket.resume());
@@ -311,11 +330,19 @@ try {
     socket.on('error', () => stopChild(proxy));
     socket.once('close', () => {
       // Pi is gone: deny open gates and reject open prompts first, give the bridge a moment to forward them, then stop it.
-      const hadGates = relay.gates.size > 0;
-      answerAllGates(relay, 'Pi connection closed');
+      const hadGates = relay.guard.open > 0;
+      relay.guard.close('Pi connection closed');
       if (hadGates) setTimeout(() => stopChild(proxy), 500); else stopChild(proxy);
       for (const token of relay.tokens) if (relays.get(token) === relay) relays.delete(token);
       for (const [id, res] of relay.pending) { relay.pending.delete(id); endJson(res, 502, { jsonrpc: '2.0', id: null, error: { code: -32000, message: 'Pi connection closed' } }); }
     });
   });
+  await new Promise<void>((resolve, reject) => {
+    httpServer!.once('error', reject);
+    httpServer!.listen(Number(url.port || 80), url.hostname === '[::1]' ? '::1' : url.hostname, () => { httpServer!.off('error', reject); resolve(); });
+  });
+  httpServer.on('error', (error) => shutdown(error));
+  await startLeader(); // the endpoint is ours; a leader is now needed. Failure here is fatal: nothing to serve without one
+  if (stopping) throw new Error('Grok gateway startup cancelled.');
+  console.log(`Grok WebSocket ACP ready at ${url}; MCP relay at ${url.origin.replace(/^ws/, 'http')}${MCP_PATH}<token>; leader socket ${leaderSocket}; binary ${grokBinary}`);
 } catch (error) { shutdown(error instanceof Error ? error : new Error(String(error))); }
