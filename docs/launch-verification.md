@@ -26,4 +26,18 @@ Not covered by this run:
 - Image-edit and video result types (`image-probe.ts` covers `image_gen` only).
 - Other Node.js and Pi versions, other platforms.
 
+## Install paths and first run, 2026-09-28
+
+Same versions. Each run used a new `HOME` under `/tmp` that held only a copy of the Grok login (`~/.grok/auth.json`, `agent_id`, `config.toml`), and `PI_CODING_AGENT_DIR` inside it. The runs used the default port 2419; no other gateway was running. Each ended with Ctrl+C on the gateway, and its leader stopped with it.
+
+| Gate | Command sequence | Outcome |
+| --- | --- | --- |
+| G2, clone | `git clone` (GitHub, `0fd1524`), `npm install --omit=dev`, `npm run server`, `pi -e . --model grok/grok-4.7 -p`, `pi install .`, a tool turn, an interactive turn, `pi remove .` | Pass. Headless turn answered `PONG`. Tool turn on the storyboard's `sum.mjs`: Grok changed the loop start from `1` to `0` and `node --test` passed. Interactive turn answered `PONG`. |
+| G2, git | `pi install git:github.com/JangMan-J/pi-grok-agent`, headless and interactive turns without `-e`, then a gateway started from the git checkout (`node <checkout>/scripts/server.ts`) | Pass, `PONG` on each turn. |
+| G2, npm | Packed tarball of the working tree after `0fd1524` (`files` list, compiled gateway, `zod` dependency) published to a local Verdaccio registry, `private` removed in a temporary copy only. Then `npm i -g pi-grok-agent`, `pi-grok-gateway` from `~`, `pi install npm:pi-grok-agent`, headless turn, tool turn, interactive turn, `pi remove npm:pi-grok-agent` | Pass. `PONG`; the `sum.mjs` fix with `node --test` 1 pass, 0 fail; interactive `PONG`. The public npm registry was not used: this checks the package layout, not publication. |
+| G3, before | Agent directory with this extension and no `grok-ws.secret`, no gateway | Pi 0.87.1 exited with status 1 for every model and mode: `Failed to load extension ".../src/model.ts": ... ENOENT ... grok-ws.secret`, then `Hint: Start without extensions using "pi -ne"`. Pi exits on any extension load error. |
+| G3, after | Same, with the secret read at connect time | The TUI starts with `grok-4.7` selected. A Grok turn prints `Grok gateway secret not found at <file>. Start the gateway once (pi-grok-gateway, or npm run server in the clone); it creates the file. Then send the message again.` `test/gateway.test.ts` covers the reconnect after the file appears. |
+
+Found on the packed layout and fixed before the npm run: the gateway `bin` failed under `node_modules` with `ERR_UNSUPPORTED_NODE_MODULES_TYPE_STRIPPING`, and the extension failed with `Cannot find module 'zod/v4'`, because `@agentclientprotocol/sdk` declares `zod` as a peer and Pi installs with `--legacy-peer-deps`.
+
 Node.js 22.19 is Pi's minimum. It is not a tested version of this package. Do not write "Pi 0.87+".

@@ -30,8 +30,16 @@
     "node": ">=22.19.0"
   },
   "bin": {
-    "pi-grok-gateway": "scripts/server.ts"
+    "pi-grok-gateway": "dist/scripts/server.js"
   },
+  "files": [
+    "src",
+    "dist",
+    "docs/usage.md",
+    "docs/first-class-model.md",
+    "README.md",
+    "LICENSE"
+  ],
   "pi": {
     "extensions": [
       "./src/model.ts"
@@ -40,12 +48,15 @@
   "scripts": {
     "test": "node --test test/*.test.ts",
     "check": "tsc --noEmit",
+    "build": "tsc -p tsconfig.build.json",
+    "prepack": "npm run build",
     "server": "node scripts/server.ts",
     "test:live": "scripts/model-live.sh gateway && scripts/hooks-live.sh"
   },
   "dependencies": {
     "@agentclientprotocol/sdk": "1.5.0",
-    "ws": "8.22.0"
+    "ws": "8.22.0",
+    "zod": "4.6.5"
   },
   "peerDependencies": {
     "@earendil-works/pi-ai": "*",
