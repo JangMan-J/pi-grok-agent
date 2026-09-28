@@ -33,29 +33,14 @@ Grok usage counts against your Grok account. Pi shows the cost that Grok reports
 
 ## Quick start
 
-Install the gateway command and the Pi extension:
-
 ```sh
-npm install -g pi-grok-agent
 pi install npm:pi-grok-agent
-```
-
-Start the gateway in its own terminal and keep it open:
-
-```sh
-pi-grok-gateway
-```
-
-When the gateway is ready, it prints a line that starts with `Grok WebSocket ACP ready at ws://127.0.0.1:2419/ws`.
-The first start creates the shared secret `~/.pi/agent/grok-ws.secret` with mode 0600. Nothing starts the gateway for you.
-
-In a second terminal:
-
-```sh
 pi --model grok/grok-4.7
 ```
 
-Pi loads the extension at every start, for every model. If the gateway is not running yet, Pi still starts, and the first Grok turn tells you to start it. Keep the two installs at the same version. To remove them, run `pi remove npm:pi-grok-agent` and `npm uninstall -g pi-grok-agent`.
+The first Grok turn starts the local gateway that comes with the package and waits for it, about 5 seconds. The gateway keeps running after Pi exits, and every Pi process on the machine shares it. Its first start creates the shared secret `~/.pi/agent/grok-ws.secret` with mode 0600. [Gateway auto-start](docs/usage.md#gateway-auto-start) explains how to stop it, or how to run it yourself with `npm install -g pi-grok-agent` and `pi-grok-gateway`.
+
+Pi loads the extension at every start, for every model. To remove it, run `pi remove npm:pi-grok-agent`.
 
 ### From a clone
 
@@ -67,7 +52,7 @@ npm run server              # terminal A: the gateway
 pi -e . --model grok/grok-4.7   # terminal B: this Pi process only; or pi install . for every session
 ```
 
-`pi install git:github.com/JangMan-J/pi-grok-agent` also works. It installs only the extension, so run the gateway from a clone or from the npm install.
+`pi install git:github.com/JangMan-J/pi-grok-agent` also works. A clone auto-starts the gateway from its own checkout, so `npm run server` is optional. A git install uses the same code path, but that is not yet tested live.
 
 ## First result
 
@@ -131,7 +116,7 @@ Images that you attach in Pi go to Grok as a temporary file path under the syste
 
 ## Limitations
 
-- The gateway must run before the first Grok turn. Until it has created its secret file, Grok turns fail with a message that names the file and the command.
+- The auto-started gateway runs until you stop it or log out. With auto-start off, the gateway must run before the first Grok turn; until it has created its secret file, Grok turns fail with a message that names the file and the command.
 - Run one gateway for each port and leader socket. A second `npm run server` with the default settings exits with `EADDRINUSE` and leaves the running gateway and its leader alone. [Run a separate gateway](docs/usage.md#run-a-second-isolated-gateway) for a demo or a test.
 - Grok's native tool calls are not Pi tool calls. Pi records them as thinking text and `grok-tool` entries, and no model receives those entries.
 - Pi compaction and Grok compaction are separate. Pi sends only the new messages of each turn. Only when it creates a new Grok session does it also send the earlier Pi transcript as text, cut to the last 60,000 characters.

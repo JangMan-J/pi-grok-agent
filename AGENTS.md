@@ -10,7 +10,7 @@ Scripts are in `package.json`. Run `npm install` once before any check. The `pi`
 
 - `npm run check`: type check (`tsc --noEmit`).
 - `npm test`: unit tests in `test/`, with mocks only, plus `test/gateway.test.ts`, which runs the real gateway against `test/fixtures/fake-grok.ts` in a scratch `HOME`. Nothing contacts Grok.
-- `npm run server`: the gateway plus a dedicated Grok leader, on `127.0.0.1:2419` by default. The package `bin` `pi-grok-gateway` is the same script compiled to `dist/scripts/server.js` (`npm run build`, run by `prepack`; `dist/` is gitignored), because Node does not strip TypeScript types under `node_modules`. It runs from any working directory. Nothing starts it automatically.
+- `npm run server`: the gateway plus a dedicated Grok leader, on `127.0.0.1:2419` by default. The package `bin` `pi-grok-gateway` is the same script compiled to `dist/scripts/server.js` (`npm run build`, run by `prepack`; `dist/` is gitignored), because Node does not strip TypeScript types under `node_modules`. It runs from any working directory. The extension also starts it on the first Grok turn when nothing listens (`src/launch.ts`); tests that load `src/model.ts` must set `PI_GROK_AUTOSTART=0` so they never start a real gateway.
 - `npm pack --dry-run`: the `files` list in `package.json` decides the tarball. Keep `evidence/`, `test/`, and the probe scripts out of it.
 - `npm run test:live` and the scripts in `scripts/`: live probes. They use the current Grok login and spend model usage. Run them only when the user asks. They write to `evidence/`. Create that directory first. It is not in `.gitignore`, so sanitize results before a commit (gate G7 in `docs/launch.md`). `scripts/reconnect-probe.ts` hardcodes port 2419 and `~/.pi/agent/grok-ws.pid` and stops that gateway, so it never runs isolated.
 
@@ -31,7 +31,8 @@ For an isolated gateway, set all three: `PI_GROK_LEADER_SOCKET` to a new socket 
 | `src/model/hooks.ts` | `capabilityGate`, `postEditContext`, `stopGate` |
 | `src/model/permissions.ts`, `questions.ts` | Grok permission prompts and `ask_user_question` as Pi dialogs |
 | `src/model/steer.ts` | Mid-turn Enter to `_x.ai/interject` |
-| `src/config.ts` | `~/.pi/agent/grok-ws.json`, environment overrides, guard validation |
+| `src/config.ts` | `~/.pi/agent/grok-ws.json`, environment overrides, guard validation. A missing secret file is not a load error: Pi exits on any extension load failure |
+| `src/launch.ts` | Gateway auto-start: when nothing listens on the loopback endpoint, spawn this install's gateway detached (`dist/` under `node_modules`, else `scripts/server.ts`) and wait for its port |
 | `scripts/server.ts` | Gateway: leader supervision, stdio bridge per socket, bearer auth, MCP relay at `/mcp/<token>`, `ReverseRequestGuard` (one guarded lifetime per hook, permission prompt, or question: ack tiers, one answer per request, fail closed on disconnect) |
 
 Invariants:

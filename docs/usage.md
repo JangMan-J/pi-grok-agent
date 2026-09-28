@@ -39,13 +39,24 @@ This page is the reference for settings, commands, and operation. Start with the
 
 ## Install options
 
-The README uses the npm package: `npm install -g pi-grok-agent` for the `pi-grok-gateway` command, and `pi install npm:pi-grok-agent` for the extension. Pi does not put a package's `bin` on `PATH`, so the gateway needs its own install. The gateway command runs compiled JavaScript from `dist/`, because Node does not strip TypeScript types under `node_modules`. The extension stays TypeScript: Pi loads it with its own loader.
+The README uses one command: `pi install npm:pi-grok-agent`. The package contains the gateway. When a Grok turn finds nothing listening on a loopback `ws://` endpoint, the extension starts that gateway (see [Gateway auto-start](#gateway-auto-start)). The gateway runs compiled JavaScript from `dist/`, because Node does not strip TypeScript types under `node_modules`. The extension stays TypeScript: Pi loads it with its own loader.
+
+To run the gateway yourself instead, for example under a service manager, install the command with `npm install -g pi-grok-agent` and run `pi-grok-gateway`. Pi does not put a package's `bin` on `PATH`, so this needs its own install. An extension that finds your gateway running does not start another one.
 
 With a clone, `npm run server` and the extension (`pi -e .` or `pi install .`) come from the same checkout.
 
 Pi does not install dependencies for a local path. It loads the directory in place. Run `npm install --omit=dev` in the clone before the first start. Pi runs the same `npm install --omit=dev` when it installs a git source.
 
-A git install (`pi install git:github.com/JangMan-J/pi-grok-agent`) installs the extension only. Run the gateway of the same version from a clone (`npm run server`) or from the npm install (`pi-grok-gateway`). All three install paths are recorded in [launch-verification.md](launch-verification.md).
+A clone also auto-starts the gateway: it runs `scripts/server.ts` from the checkout. A git install (`pi install git:github.com/JangMan-J/pi-grok-agent`) takes the same path; its auto-start is not yet tested live. All install paths are recorded in [launch-verification.md](launch-verification.md).
+
+### Gateway auto-start
+
+- Trigger: a Grok turn opens the connection, and nothing accepts TCP on the configured loopback `ws://` endpoint. A `wss://` endpoint is never started.
+- Process: the gateway of the installed version runs as a detached process with its own session, working directory `~`, and Pi's environment. It writes to `<agent dir>/grok-ws.log`. The first turn waits until the port accepts connections, about 5 seconds with a cold leader.
+- Lifetime: the gateway keeps running after Pi exits. Every Pi process on the machine shares it. Stop it with `pkill -INT -f 'pi-grok-agent/(dist/)?scripts/server'`; it stops its leader.
+- Two Pi processes that start at the same time are safe. The gateway binds its port before it starts or adopts a leader, so the second one exits with `EADDRINUSE` and both connect to the first.
+- `/grok debug` shows `auto-start on` or `off`, and the pid when this Pi process started the gateway.
+- Turn it off with `"autoStartGateway": false` in `grok-ws.json` or `PI_GROK_AUTOSTART=0`. Then start the gateway yourself before the first Grok turn.
 
 ## Models and Pi controls
 
@@ -222,6 +233,7 @@ Optional settings file: `~/.pi/agent/grok-ws.json`. If `PI_CODING_AGENT_DIR` is 
 | --- | --- |
 | `url` | Gateway WebSocket URL. A non-loopback URL must use `wss://`. The gateway itself accepts only a loopback `ws://` URL that ends in `/ws`. |
 | `secretFile` | Absolute path or a path that starts with `~/`. |
+| `autoStartGateway` | `true` (default) or `false`. See [Gateway auto-start](#gateway-auto-start). |
 | `grokMode` | Grok's own permission mode: `default`, `auto`, or `yolo`. Sent each time Pi attaches a Grok session. Separate from `/grok perms`. See [Grok permission prompts](#grok-permission-prompts). |
 | `hooks.denyGrokTools`, `hooks.allowGrokTools` | Regular expressions that match the whole Grok tool name. |
 | `hooks.mcpReadOnlyServers` | MCP server names whose tools count as read-only. |
@@ -251,6 +263,7 @@ Example with checks:
 | `PI_GROK_HEADLESS_PERMISSIONS` | `headlessPermissions` |
 | `PI_GROK_MEDIA_DIR` | `mediaDir` |
 | `PI_GROK_GROK_MODE` | `grokMode` |
+| `PI_GROK_AUTOSTART` | `autoStartGateway`. `0`, `false`, `no`, or `off` turn it off. |
 | `PI_GROK_DENY_TOOLS` | `hooks.denyGrokTools`, comma-separated |
 | `PI_GROK_POST_EDIT_CHECK` | `hooks.postEditCheck` |
 | `PI_GROK_STOP_CHECK` | `hooks.stopCheck` |
@@ -276,6 +289,7 @@ Example with checks:
 | `~/.pi/agent/` | Gateway | Directory, mode 0700, if missing |
 | `~/.pi/agent/grok-ws.secret` | Gateway, first start | Random bearer secret, mode 0600 |
 | `~/.pi/agent/grok-ws.json` | You | Optional settings |
+| `~/.pi/agent/grok-ws.log` | Auto-started gateway | Gateway output, appended, mode 0600 |
 | `~/.grok/pi/leader.sock` and `leader.lock` | Grok leader | Leader socket. It is outside Grok's `leader-*.sock` discovery pattern, so the Grok TUI does not attach to it. |
 | `.pi/grok-images/` in the Pi working directory | Extension | Copies of Grok media, with a `.gitignore` |
 | `pi-grok-images/` in the system temp directory | Extension | Attached images for Grok and PNG copies for display |

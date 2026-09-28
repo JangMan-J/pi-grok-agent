@@ -10,7 +10,7 @@ This file holds the capability ledger, launch gates, channel drafts, schedule, r
 - GitHub: `JangMan-J/pi-grok-agent` is already public.
 - npm: `"private": true` in `package.json` blocks npm publication only. It has no effect on GitHub visibility. The Pi package gallery lists npm packages, so it does not apply until the owner decides to publish.
 - Pi repository: the installed Pi 0.87.1 `package.json` names `github.com/earendil-works/pi` (the research digests cite `pi0/pi-mono` and `badlogic/pi-mono`, which are wrong).
-- Install path: npm. `npm install -g pi-grok-agent` for the `pi-grok-gateway` command, then `pi install npm:pi-grok-agent`. The clone and `pi install git:` remain alternatives. All three pass in a clean `HOME` ([launch-verification.md](launch-verification.md#install-paths-and-first-run-2026-09-28)); the npm path was checked against a local registry and needs the owner's publication.
+- Install path: npm, one command: `pi install npm:pi-grok-agent`. The first Grok turn starts the bundled gateway. `npm install -g pi-grok-agent` with `pi-grok-gateway` is for users who run the gateway themselves. The clone and `pi install git:` remain alternatives. All three pass in a clean `HOME` ([launch-verification.md](launch-verification.md#install-paths-and-first-run-2026-09-28)); the npm path was checked against a local registry and needs the owner's publication.
 - Pi compatibility: tested with Pi 0.87.1 only. Other Pi versions are untested. Node.js 22.19 is Pi's minimum. This package is tested only on Node.js 26.10.0. Do not write "Pi 0.87+".
 - GitHub About, applied 2026-09-28: the description and topics from [docs/github-presentation.md](github-presentation.md) are live, and [docs/assets/social-preview.png](assets/social-preview.png) is the social preview (the served image matched the committed PNG by SHA-256). Details in section 5.1.
 
@@ -181,7 +181,7 @@ Read the subreddit rules first. It limits self-promotion. Lead with the use case
 
 `BubblePtr/awesome-pi` asks for a PR with name, link, description, and install command. Check its current format first.
 
-> - [pi-grok-agent]({repo URL}) - Grok Build as a Pi model provider. Grok keeps its native tools. Pi gates them and lends extension tools. Setup: `npm install -g pi-grok-agent`, `pi install npm:pi-grok-agent`, run `pi-grok-gateway`.
+> - [pi-grok-agent]({repo URL}) - Grok Build as a Pi model provider. Grok keeps its native tools. Pi gates them and lends extension tools. Setup: `pi install npm:pi-grok-agent`.
 
 `shaftoe/awesome-pi-coding-agent` says it is automatically curated. Do not open a PR there.
 
@@ -292,7 +292,7 @@ What you tried the provider on:
 
 ## 9. Owner decisions still open
 
-Decided: the install path is npm (`npm install -g pi-grok-agent`, `pi install npm:pi-grok-agent`). Open: npm publication (remove `"private": true`, `npm publish`).
+Decided: the install path is npm (`pi install npm:pi-grok-agent`, gateway auto-start). Open: npm publication (remove `"private": true`, `npm publish`).
 - npm publication: remove `private: true` and publish when the owner decides. The README already documents the `npm:` install, so push the README change together with the publication, not before.
 - Whether to commit sanitized `evidence/` results (G7).
 - G3 is fixed in code. G5 is fixed in code; its live check is a demo gate.
