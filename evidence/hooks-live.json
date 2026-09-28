@@ -1,0 +1,10 @@
+{
+  "model": "grok-4.7",
+  "ok": true,
+  "results": [
+    "gate: PASS (hashline_grep,hashline_grep:completed,hashline_edit,hashline_edit:failed)",
+    "post-edit: PASS (hashline_read,hashline_read:completed,hashline_edit,hashline_edit:completed,hashline_edit,hashline_edit:completed)",
+    "stop: PASS (done.txt created after block; tools=run_terminal_command,run_terminal_command:completed)"
+  ],
+  "gateAnswer": "The `hashline_edit` tool was denied: this Pi session is read-only, so file edits and writes are not allowed."
+}

@@ -1,0 +1,724 @@
+{
+  "cwd": "/tmp/<scratch>",
+  "transport": "http",
+  "toolWaitMs": 5000,
+  "sdkCalls": [
+    {
+      "method": "server/discover",
+      "id": 0
+    },
+    {
+      "method": "initialize",
+      "id": 0
+    },
+    {
+      "method": "tools/list",
+      "id": 1
+    },
+    {
+      "method": "tools/call",
+      "id": 2,
+      "heldMs": 5014
+    }
+  ],
+  "toolCallUpdates": [
+    {
+      "kind": "tool_call",
+      "title": "search_tool",
+      "rawInput": {
+        "query": "pi_echo_secret",
+        "limit": 5
+      }
+    },
+    {
+      "kind": "tool_call_update",
+      "title": "Search tools: \"pi_echo_secret\"",
+      "toolKind": "other",
+      "rawInput": {
+        "variant": "SearchTool",
+        "query": "pi_echo_secret",
+        "limit": 5
+      }
+    },
+    {
+      "kind": "tool_call_update",
+      "status": "completed"
+    },
+    {
+      "kind": "tool_call",
+      "title": "use_tool",
+      "rawInput": {
+        "tool_name": "pi__pi_echo_secret",
+        "tool_input": {}
+      }
+    },
+    {
+      "kind": "tool_call_update",
+      "title": "pi__pi_echo_secret",
+      "toolKind": "other",
+      "rawInput": {
+        "variant": "UseTool",
+        "tool_name": "pi__pi_echo_secret",
+        "tool_input": {}
+      }
+    },
+    {
+      "kind": "tool_call_update",
+      "status": "completed"
+    },
+    {
+      "kind": "tool_call",
+      "title": "search_tool",
+      "rawInput": {
+        "query": "*",
+        "limit": 255
+      }
+    },
+    {
+      "kind": "tool_call_update",
+      "title": "Search tools: \"*\"",
+      "toolKind": "other",
+      "rawInput": {
+        "variant": "SearchTool",
+        "query": "*",
+        "limit": 255
+      }
+    },
+    {
+      "kind": "tool_call_update",
+      "status": "completed"
+    },
+    {
+      "kind": "tool_call",
+      "title": "search_tool",
+      "rawInput": {
+        "query": "tasks",
+        "limit": 255
+      }
+    },
+    {
+      "kind": "tool_call_update",
+      "title": "Search tools: \"tasks\"",
+      "toolKind": "other",
+      "rawInput": {
+        "variant": "SearchTool",
+        "query": "tasks",
+        "limit": 255
+      }
+    },
+    {
+      "kind": "tool_call",
+      "title": "search_tool",
+      "rawInput": {
+        "query": "pi",
+        "limit": 255
+      }
+    },
+    {
+      "kind": "tool_call_update",
+      "title": "Search tools: \"pi\"",
+      "toolKind": "other",
+      "rawInput": {
+        "variant": "SearchTool",
+        "query": "pi",
+        "limit": 255
+      }
+    },
+    {
+      "kind": "tool_call",
+      "title": "search_tool",
+      "rawInput": {
+        "query": "tool",
+        "limit": 255
+      }
+    },
+    {
+      "kind": "tool_call_update",
+      "title": "Search tools: \"tool\"",
+      "toolKind": "other",
+      "rawInput": {
+        "variant": "SearchTool",
+        "query": "tool",
+        "limit": 255
+      }
+    },
+    {
+      "kind": "tool_call_update",
+      "status": "completed"
+    },
+    {
+      "kind": "tool_call_update",
+      "status": "completed"
+    },
+    {
+      "kind": "tool_call_update",
+      "status": "completed"
+    }
+  ],
+  "checks": [
+    "Grok listed Pi-hosted tools through x.ai/mcp/sdk_call",
+    "Grok called pi_echo_secret through x.ai/mcp/sdk_call and waited 5014ms for the result",
+    "Final answer contained the token that only the Pi-hosted tool returned",
+    "No native permission request; tool_call updates reference only the Pi-hosted tool"
+  ],
+  "agentAdvertisesSdk": null,
+  "unmatched": [
+    {
+      "method": "_x.ai/mcp/servers_updated",
+      "hasId": false,
+      "paramKeys": [
+        "mcpServers"
+      ]
+    },
+    {
+      "method": "_x.ai/session/setup",
+      "hasId": false,
+      "paramKeys": [
+        "method",
+        "phase",
+        "sessionId"
+      ]
+    },
+    {
+      "method": "_x.ai/session/setup",
+      "hasId": false,
+      "paramKeys": [
+        "method",
+        "phase",
+        "sessionId"
+      ]
+    },
+    {
+      "method": "_x.ai/session/setup",
+      "hasId": false,
+      "paramKeys": [
+        "method",
+        "phase",
+        "sessionId"
+      ]
+    },
+    {
+      "method": "_x.ai/session/setup",
+      "hasId": false,
+      "paramKeys": [
+        "method",
+        "phase",
+        "sessionId"
+      ]
+    },
+    {
+      "method": "_x.ai/session/setup",
+      "hasId": false,
+      "paramKeys": [
+        "method",
+        "phase",
+        "sessionId"
+      ]
+    },
+    {
+      "method": "_x.ai/models/update",
+      "hasId": false,
+      "paramKeys": [
+        "currentModelId",
+        "availableModels"
+      ]
+    },
+    {
+      "method": "_x.ai/settings/update",
+      "hasId": false,
+      "paramKeys": [
+        "show_resolved_model",
+        "sharing_enabled",
+        "privacy_notice_rollout",
+        "privacy_banner_reshow_days",
+        "session_picker_grouped",
+        "tips",
+        "slash_command_tags",
+        "announcements",
+        "campaigns",
+        "gate_message",
+        "gate_url",
+        "gate_label",
+        "allow_access",
+        "consent_gate",
+        "subscription_tier_display",
+        "auto_permission_mode_enabled",
+        "prompt_suggestions_enabled",
+        "permission_mode",
+        "group_tool_verbs",
+        "collapsed_edit_blocks",
+        "subscription_watch_interval_secs",
+        "dock_enabled",
+        "terminal_theme_enabled",
+        "subagent_model_inheritance_enabled"
+      ]
+    },
+    {
+      "method": "_x.ai/session/setup",
+      "hasId": false,
+      "paramKeys": [
+        "method",
+        "phase",
+        "sessionId"
+      ]
+    },
+    {
+      "method": "_x.ai/mcp/init_progress",
+      "hasId": false,
+      "paramKeys": [
+        "total",
+        "connected",
+        "sessionId"
+      ]
+    },
+    {
+      "method": "_x.ai/mcp_initialized",
+      "hasId": false,
+      "paramKeys": [
+        "sessionId",
+        "mcpToolCount",
+        "elapsedMs"
+      ]
+    },
+    {
+      "method": "_x.ai/sessions/changed",
+      "hasId": false,
+      "paramKeys": [
+        "upserted",
+        "removed"
+      ]
+    },
+    {
+      "method": "_x.ai/queue/changed",
+      "hasId": false,
+      "paramKeys": [
+        "sessionId",
+        "entries"
+      ]
+    },
+    {
+      "method": "_x.ai/queue/changed",
+      "hasId": false,
+      "paramKeys": [
+        "sessionId",
+        "entries",
+        "runningPromptId",
+        "runningText",
+        "runningKind"
+      ]
+    },
+    {
+      "method": "_x.ai/mcp/server_status",
+      "hasId": false,
+      "paramKeys": [
+        "sessionId",
+        "name",
+        "source",
+        "status",
+        "reason",
+        "tools"
+      ]
+    },
+    {
+      "method": "_x.ai/session_notification",
+      "hasId": false,
+      "paramKeys": [
+        "sessionId",
+        "update",
+        "_meta"
+      ]
+    },
+    {
+      "method": "_x.ai/models/update",
+      "hasId": false,
+      "paramKeys": [
+        "currentModelId",
+        "availableModels"
+      ]
+    },
+    {
+      "method": "_x.ai/session_notification",
+      "hasId": false,
+      "paramKeys": [
+        "sessionId",
+        "update"
+      ]
+    },
+    {
+      "method": "_x.ai/session_notification",
+      "hasId": false,
+      "paramKeys": [
+        "sessionId",
+        "update"
+      ]
+    },
+    {
+      "method": "_x.ai/session_notification",
+      "hasId": false,
+      "paramKeys": [
+        "sessionId",
+        "update"
+      ]
+    },
+    {
+      "method": "_x.ai/session_notification",
+      "hasId": false,
+      "paramKeys": [
+        "sessionId",
+        "update"
+      ]
+    },
+    {
+      "method": "_x.ai/session_notification",
+      "hasId": false,
+      "paramKeys": [
+        "sessionId",
+        "update"
+      ]
+    },
+    {
+      "method": "_x.ai/announcements/update",
+      "hasId": false,
+      "paramKeys": [
+        "gen",
+        "announcements"
+      ]
+    },
+    {
+      "method": "_x.ai/session_notification",
+      "hasId": false,
+      "paramKeys": [
+        "sessionId",
+        "update"
+      ]
+    },
+    {
+      "method": "_x.ai/session_notification",
+      "hasId": false,
+      "paramKeys": [
+        "sessionId",
+        "update"
+      ]
+    },
+    {
+      "method": "_x.ai/session_notification",
+      "hasId": false,
+      "paramKeys": [
+        "sessionId",
+        "update"
+      ]
+    },
+    {
+      "method": "_x.ai/session_notification",
+      "hasId": false,
+      "paramKeys": [
+        "sessionId",
+        "update"
+      ]
+    },
+    {
+      "method": "_x.ai/session_notification",
+      "hasId": false,
+      "paramKeys": [
+        "sessionId",
+        "update"
+      ]
+    },
+    {
+      "method": "_x.ai/session_notification",
+      "hasId": false,
+      "paramKeys": [
+        "sessionId",
+        "update"
+      ]
+    },
+    {
+      "method": "_x.ai/models/update",
+      "hasId": false,
+      "paramKeys": [
+        "currentModelId",
+        "availableModels"
+      ]
+    },
+    {
+      "method": "_x.ai/session_notification",
+      "hasId": false,
+      "paramKeys": [
+        "sessionId",
+        "update"
+      ]
+    },
+    {
+      "method": "_x.ai/queue/changed",
+      "hasId": false,
+      "paramKeys": [
+        "sessionId",
+        "entries"
+      ]
+    },
+    {
+      "method": "_x.ai/session_notification",
+      "hasId": false,
+      "paramKeys": [
+        "sessionId",
+        "update",
+        "_meta"
+      ]
+    },
+    {
+      "method": "_x.ai/session/prompt_complete",
+      "hasId": false,
+      "paramKeys": [
+        "sessionId",
+        "promptId",
+        "stopReason",
+        "agentResult"
+      ]
+    },
+    {
+      "method": "_x.ai/sessions/changed",
+      "hasId": false,
+      "paramKeys": [
+        "upserted",
+        "removed"
+      ]
+    },
+    {
+      "method": "_x.ai/sessions/changed",
+      "hasId": false,
+      "paramKeys": [
+        "upserted",
+        "removed"
+      ]
+    },
+    {
+      "method": "_x.ai/queue/changed",
+      "hasId": false,
+      "paramKeys": [
+        "sessionId",
+        "entries"
+      ]
+    },
+    {
+      "method": "_x.ai/queue/changed",
+      "hasId": false,
+      "paramKeys": [
+        "sessionId",
+        "entries",
+        "runningPromptId",
+        "runningText",
+        "runningKind"
+      ]
+    },
+    {
+      "method": "_x.ai/session_notification",
+      "hasId": false,
+      "paramKeys": [
+        "sessionId",
+        "update"
+      ]
+    },
+    {
+      "method": "_x.ai/session_notification",
+      "hasId": false,
+      "paramKeys": [
+        "sessionId",
+        "update"
+      ]
+    },
+    {
+      "method": "_x.ai/session_notification",
+      "hasId": false,
+      "paramKeys": [
+        "sessionId",
+        "update"
+      ]
+    },
+    {
+      "method": "_x.ai/session_notification",
+      "hasId": false,
+      "paramKeys": [
+        "sessionId",
+        "update"
+      ]
+    },
+    {
+      "method": "_x.ai/session_notification",
+      "hasId": false,
+      "paramKeys": [
+        "sessionId",
+        "update"
+      ]
+    },
+    {
+      "method": "_x.ai/models/update",
+      "hasId": false,
+      "paramKeys": [
+        "currentModelId",
+        "availableModels"
+      ]
+    },
+    {
+      "method": "_x.ai/session_notification",
+      "hasId": false,
+      "paramKeys": [
+        "sessionId",
+        "update"
+      ]
+    },
+    {
+      "method": "_x.ai/session_notification",
+      "hasId": false,
+      "paramKeys": [
+        "sessionId",
+        "update"
+      ]
+    },
+    {
+      "method": "_x.ai/session_notification",
+      "hasId": false,
+      "paramKeys": [
+        "sessionId",
+        "update"
+      ]
+    },
+    {
+      "method": "_x.ai/session_notification",
+      "hasId": false,
+      "paramKeys": [
+        "sessionId",
+        "update"
+      ]
+    },
+    {
+      "method": "_x.ai/session_notification",
+      "hasId": false,
+      "paramKeys": [
+        "sessionId",
+        "update"
+      ]
+    },
+    {
+      "method": "_x.ai/session_notification",
+      "hasId": false,
+      "paramKeys": [
+        "sessionId",
+        "update"
+      ]
+    },
+    {
+      "method": "_x.ai/session_notification",
+      "hasId": false,
+      "paramKeys": [
+        "sessionId",
+        "update"
+      ]
+    },
+    {
+      "method": "_x.ai/session_notification",
+      "hasId": false,
+      "paramKeys": [
+        "sessionId",
+        "update"
+      ]
+    },
+    {
+      "method": "_x.ai/session_notification",
+      "hasId": false,
+      "paramKeys": [
+        "sessionId",
+        "update"
+      ]
+    },
+    {
+      "method": "_x.ai/session_notification",
+      "hasId": false,
+      "paramKeys": [
+        "sessionId",
+        "update"
+      ]
+    },
+    {
+      "method": "_x.ai/session_notification",
+      "hasId": false,
+      "paramKeys": [
+        "sessionId",
+        "update"
+      ]
+    },
+    {
+      "method": "_x.ai/session_notification",
+      "hasId": false,
+      "paramKeys": [
+        "sessionId",
+        "update"
+      ]
+    },
+    {
+      "method": "_x.ai/session_notification",
+      "hasId": false,
+      "paramKeys": [
+        "sessionId",
+        "update"
+      ]
+    },
+    {
+      "method": "_x.ai/session_notification",
+      "hasId": false,
+      "paramKeys": [
+        "sessionId",
+        "update"
+      ]
+    },
+    {
+      "method": "_x.ai/queue/changed",
+      "hasId": false,
+      "paramKeys": [
+        "sessionId",
+        "entries"
+      ]
+    },
+    {
+      "method": "_x.ai/session_notification",
+      "hasId": false,
+      "paramKeys": [
+        "sessionId",
+        "update",
+        "_meta"
+      ]
+    },
+    {
+      "method": "_x.ai/session/prompt_complete",
+      "hasId": false,
+      "paramKeys": [
+        "sessionId",
+        "promptId",
+        "stopReason",
+        "agentResult"
+      ]
+    },
+    {
+      "method": "_x.ai/sessions/changed",
+      "hasId": false,
+      "paramKeys": [
+        "upserted",
+        "removed"
+      ]
+    }
+  ],
+  "unknownTokenStatus": 404,
+  "sdkCallWireMethod": "_x.ai/mcp/sdk_call",
+  "anonymousProbeStatus": 400,
+  "getStatus": 405,
+  "sessionId": "<session-id>",
+  "sessionModel": "grok-4.7",
+  "stopReason": "end_turn",
+  "answer": "c4580ea0dec33c625f5fc403",
+  "nativeToolTitles": [
+    "search_tool",
+    "use_tool"
+  ],
+  "permissionRequests": 0,
+  "selfReportedTools": "I'll look up every tool name currently exposed, then list only those names.search_tool\nuse_tool\npi__pi_echo_secret\ntasks__get_results\ntasks__delete\ntasks__run_now\ntasks__pause\ntasks__list\ntasks__update\ntasks__validate\ntasks__list_trigger_resources\ntasks__list_trigger_catalog\ntasks__create",
+  "ok": true
+}

@@ -1,0 +1,28 @@
+{
+  "ok": true,
+  "stopReason": "end_turn",
+  "mcpCallsReachingServers": [
+    "marked:peek"
+  ],
+  "gateDecisions": [
+    {
+      "tool": "search_tool",
+      "allow": true
+    },
+    {
+      "tool": "marked__peek",
+      "allow": true
+    },
+    {
+      "tool": "unmarked__poke",
+      "allow": false,
+      "reason": "This Pi session is read-only and cannot verify that MCP tool unmarked__poke only reads. Report what you would call instead."
+    }
+  ],
+  "stampsSeen": [
+    "search_tool:search_tool:false",
+    "use_tool:use_tool:false",
+    "use_tool:use_tool:false"
+  ],
+  "answer": "I'll look up the peek and poke tool schemas first, then call them in that order and report each result.**peek** (`marked__peek`): `MARBLE`\n\n**poke** (`unmarked__poke`): denied. Exact reason: `Hook denied: This Pi session is read-only and cannot verify that MCP tool unmarked__poke only reads. Report what you would call instead.`\n\nThe call that was denied, and not retried, was `unmarked__poke` with `{}`."
+}

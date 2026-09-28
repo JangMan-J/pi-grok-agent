@@ -1,0 +1,35 @@
+{
+  "cwd": "/tmp/<scratch>",
+  "outbound": {
+    "stopReason": "end_turn",
+    "answer": "I'll generate the red circle image once, then return only the saved file path.~/.grok/sessions/%2Ftmp%2Fgrok-image-8F726L/<session-id>/images/1.jpg",
+    "toolCallUpdates": [
+      {
+        "kind": "tool_call",
+        "title": "image_gen",
+        "content": "\"\"",
+        "meta": "{\"x.ai/tool\":{\"version\":1,\"name\":\"image_gen\",\"kind\":\"image_gen\",\"namespace\":\"grok_build\",\"label\":\"Generate Image\",\"read_only\":false}}"
+      }
+    ],
+    "lastCompleted": "{\"sessionUpdate\":\"tool_call_update\",\"toolCallId\":\"call-<id>\",\"status\":\"completed\",\"content\":[{\"type\":\"content\",\"content\":{\"type\":\"text\",\"text\":\"{\\\"path\\\":\\\"~/.grok/sessions/%2Ftmp%2Fgrok-image-8F726L/<session-id>/images/1.jpg\\\",\\\"filename\\\":\\\"1.jpg\\\",\\\"session_folder\\\":\\\"images\\\",\\\"message\\\":\\\"Image generated and saved to ~/.grok/sessions/%2Ftmp%2Fgrok-image-8F726L/<session-id>/images/1.jpg. Do not read or re-display it, and do not describe how it appears to the user.\\\"}\"}}],\"rawOutput\":{\"ty",
+    "postToolUseResult": "{\"type\":\"ImageGen\",\"path\":\"~/.grok/sessions/%2Ftmp%2Fgrok-image-8F726L/<session-id>/images/1.jpg\",\"filename\":\"1.jpg\",\"session_folder\":\"images\"}",
+    "pathFromAnswer": "~/.grok/sessions/%2Ftmp%2Fgrok-image-8F726L/<session-id>/images/1.jpg",
+    "fileBytes": 88658,
+    "magic": "ffd8ffe000104a46",
+    "isPng": false
+  },
+  "inbound": {
+    "accepted": true,
+    "stopReason": "end_turn",
+    "answer": "Unknown",
+    "pathFallback": {
+      "stopReason": "end_turn",
+      "answer": "Red",
+      "toolsUsed": [
+        "hashline_read",
+        "image_gen",
+        "run_terminal_command"
+      ]
+    }
+  }
+}

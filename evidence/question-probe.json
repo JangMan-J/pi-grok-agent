@@ -1,0 +1,38 @@
+{
+  "ask": {
+    "stopReason": "end_turn",
+    "questionsReceived": [
+      {
+        "questions": [
+          {
+            "q": "Which database should the project use?",
+            "opts": [
+              "Postgres",
+              "SQLite"
+            ]
+          }
+        ],
+        "mode": "default"
+      }
+    ],
+    "dialogsShown": [
+      {
+        "title": "Grok asks (1/1): Which database should the project use?",
+        "options": [
+          "Postgres — A client-server database for concurrent access, stronger constraints, and multi-user deployments.",
+          "SQLite — A single-file embedded database with no separate server, suited to local and single-process apps.",
+          "Other"
+        ]
+      }
+    ],
+    "answerText": "I'll ask which database you want, then reply with your choice.chosen=SQLite",
+    "ok": true
+  },
+  "commands": {
+    "ok": true,
+    "goalStatus": "No goal is currently set. Use /goal <objective> to start one.",
+    "goalStop": "end_turn",
+    "context": "(empty text)",
+    "contextStop": "end_turn"
+  }
+}

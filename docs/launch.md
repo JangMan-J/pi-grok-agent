@@ -22,6 +22,7 @@ Evidence labels:
 
 - Source: the cited code shows the behavior.
 - Unit: a tracked test in `test/` covers the behavior with mocks. It does not contact Grok.
+- Live 2026-09-28: a result from the run recorded in [`docs/launch-verification.md`](launch-verification.md), with its `evidence/` file.
 - Live, evidence absent: `README.md` or `docs/first-class-model.md` reports a live run, but no result file is in this checkout. Do not make a public claim until [`docs/launch-verification.md`](launch-verification.md) records a result.
 - Unprobed: the code handles the case, but no probe or test exercises it.
 
@@ -30,17 +31,17 @@ Tracked tests versus current baseline: the tracked suite is 33 test cases in fiv
 | Capability | Status | Evidence |
 | --- | --- | --- |
 | `grok/grok-4.7`, `grok-4.7-build-fast`, `grok-4.6`, `grok-4.5` as Pi models, 500k context | Source | `src/model.ts` `registerProvider`, `MODEL_IDS` in `src/model/provider.ts` |
-| Grok native tools run on Grok's harness. Pi shows them as thinking text and `grok-tool` entries and does not execute them. | Unit. Live, evidence absent. | `session.ts` `tool_call` case, `test/model.test.ts` "Grok native tool activity is observed, not executed", `scripts/model-live.sh` |
+| Grok native tools run on Grok's harness. Pi shows them as thinking text and `grok-tool` entries and does not execute them. | Unit. Live 2026-09-28 (0 Pi tool executions, 5 Grok native). | `session.ts` `tool_call` case, `test/model.test.ts` "Grok native tool activity is observed, not executed", `scripts/model-live.sh` |
 | Hashline edits (`hashline_read`, `hashline_edit`, `hashline_grep`) | Conditional | Only when `~/.grok/config.toml` sets `[toolset] file_toolset = "hashline"`. Otherwise Grok uses `read_file` and `search_replace`. |
 | Full tool results | Qualified | Grok's model context keeps full results. Pi adds only `additionalContext` in `post_tool_use`. Pi's copies are shortened: 400 characters in the thinking stream, 8000 in the `grok-tool` entry, 600 in the expanded renderer. Lent Pi tool results pass to Grok whole. |
-| Pi tools lent to Grok over HTTP MCP through the gateway | Unit. Live, evidence absent. | `handleMcpHttp` in `scripts/server.ts`, `test/model.test.ts`, `scripts/model-probe.ts` |
+| Pi tools lent to Grok over HTTP MCP through the gateway | Unit. Live 2026-09-28 (`model-probe`, `mcp-gate-probe`). | `handleMcpHttp` in `scripts/server.ts`, `test/model.test.ts`, `scripts/model-probe.ts` |
 | Grok permission prompts as Pi dialogs, headless policy | Source | `src/model/permissions.ts`, `headlessPermissions` in `src/config.ts` |
-| Pi gates Grok tools (`pre_tool_use`), post-edit check, stop check | Unit. Live, evidence absent. | `test/hooks.test.ts`, `scripts/hooks-live.sh` |
+| Pi gates Grok tools (`pre_tool_use`), post-edit check, stop check | Unit. Live 2026-09-28 (`hooks-live` 3/3, `hooks-probe`). | `test/hooks.test.ts`, `scripts/hooks-live.sh` |
 | `/grok perms yolo, auto, ask, read-only` | Unit | `test/hooks.test.ts` "/grok perms" tests |
-| Gateway guard tiers when Pi is slow or gone | Unit (validation) and wire test with a fake Grok binary. Live, evidence absent. | `test/guard.test.ts`; `test/gateway.test.ts` covers ack, policy, dialog, and disconnect tiers, one answer per request, and `ask` mode's dialog deadline; `scripts/gateway-guard-probe.ts` |
+| Gateway guard tiers when Pi is slow or gone | Unit (validation) and wire test with a fake Grok binary. Live 2026-09-28 (`gateway-guard-probe`: hung, gone, dialog). | `test/guard.test.ts`; `test/gateway.test.ts` covers ack, policy, dialog, and disconnect tiers, one answer per request, and `ask` mode's dialog deadline; `scripts/gateway-guard-probe.ts` |
 | Gateway startup does not stop another gateway's leader | Wire test with a fake Grok binary | `test/gateway.test.ts` "a launch that loses its port": the port is bound before a leader is started or adopted |
-| `ask_user_question` as Pi dialogs | Unit | `test/questions.test.ts` |
-| Image generation: copied to `.pi/grok-images/`, shown inline after the turn | Unit. Live, evidence absent. | `copyMedia`, `flushMedia`, `test/hooks.test.ts` "media copy", `scripts/image-probe.ts` (probes `image_gen` only) |
+| `ask_user_question` as Pi dialogs | Unit. Live 2026-09-28 (`question-probe`). | `test/questions.test.ts` |
+| Image generation: copied to `.pi/grok-images/`, shown inline after the turn | Unit. Live 2026-09-28 (`image-probe`: `image_gen` result shape and path; the inline display step is not covered by the probe). | `copyMedia`, `flushMedia`, `test/hooks.test.ts` "media copy", `scripts/image-probe.ts` (probes `image_gen` only) |
 | Inline image display | Conditional | The terminal must support images. Every non-PNG preview (JPEG, WebP, GIF) needs ImageMagick `magick` for the PNG conversion (`asPng` in `src/model.ts`). Without it, only the path shows. |
 | Image edit, image to video, video generation | Unprobed | Detected by result type in `mediaPath`. Video files get a path line only, because `IMAGE_MIME` has no video types. |
 | Images attached in Pi reach Grok | Unit | Written to a temp file and passed by path. `test/hooks.test.ts` "inbound image blocks" |
@@ -81,7 +82,7 @@ Each gate must pass before the first public post. Record runtime results in [`do
 | --- | --- | --- |
 | G2 | The README install path runs end to end in a clean `HOME` with a separate `PI_CODING_AGENT_DIR`. | Main |
 | G3 | First-run failure is known: what Pi shows when the secret file is missing and the extension loads. Document it or make the extension fail gently. A globally installed package loads in every Pi session. | Main |
-| G4 | Live claims have current results in [docs/launch-verification.md](launch-verification.md), with Node, Pi, and Grok versions. README claims without a result are reworded. Ordinary verification is already authorized. No live check has passed yet in this revision. | Main |
+| G4 | Live claims have current results in [docs/launch-verification.md](launch-verification.md), with Node, Pi, and Grok versions. README claims without a result are reworded. Ordinary verification is already authorized. Run of 2026-09-28: 8 probes passed on Node.js 26.10.0, Pi 0.87.1, Grok Build 1.0.41. Steering effect and reconnect remain uncovered. | Main |
 | G5 | Closed in code: the registered `input` handler acts only while the active provider is `grok` (`src/model.ts`, `test/extension.test.ts`). The live effect of an interjection on a running turn is still unverified, so keep steering out of the demo until a raw take shows it. | Main |
 | G6 | README and `docs/first-class-model.md` fixes found in review (Node 22.19, server first, second-gateway hazard, qualified claims, broken references). | Main |
 | G7 | Sanitized recordings and evidence. Before any recording, screenshot, transcript, or `evidence/` file is committed or posted, remove or redact prompts that are not demo prompts, `/grok debug` output and hook feedback that show paths, session IDs, or tokens, the bearer secret, account details, and home paths (use `~/`). `evidence/` is not in `.gitignore`, so check `git status` before a commit. | Owner, Main |

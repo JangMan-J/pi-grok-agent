@@ -1,0 +1,46 @@
+{
+  "ackMs": 5000,
+  "cases": {
+    "hung": {
+      "ok": true,
+      "fileCreated": false,
+      "toolDenied": true,
+      "gatewayDenyAfterMs": 5008,
+      "stopReason": "end_turn",
+      "elapsedMs": 9871,
+      "answer": "I'll create `hung.txt` with the contents `hi`.The tool was denied: \"Hook denied: Denied by the Pi gateway: Pi did not acknowledge within 5s.\"\n\nStopping here. `hung.txt` was not created.",
+      "log": [
+        "2933ms hook pre_tool_use write",
+        "2933ms client ignores pre_tool_use (no ack)",
+        "2933ms tool_call write",
+        "7941ms tool failed [{\"type\":\"content\",\"content\":{\"type\":\"text\",\"text\":\"Hook denied: Denied by the Pi gateway: Pi did not acknowledge within 5s.\"}}]",
+        "10057ms hook stop "
+      ]
+    },
+    "gone": {
+      "ok": true,
+      "promptSeen": true,
+      "fileCreated": false,
+      "log": [
+        "2649ms tool_call run_terminal_command",
+        "2649ms permission Execute `echo hi > gone.txt`",
+        "2649ms client drops socket"
+      ]
+    },
+    "dialog": {
+      "ok": true,
+      "fileCreated": true,
+      "stopReason": "end_turn",
+      "answeredAfterMs": 8000,
+      "log": [
+        "3752ms tool_call run_terminal_command",
+        "3752ms permission Execute `echo hi > dialog.txt`",
+        "3752ms acked with dialog:true; answering in 8000ms",
+        "11781ms client answers allow",
+        "11790ms tool in_progress [{\"type\":\"content\",\"content\":{\"type\":\"text\",\"text\":\"\"}}]",
+        "11931ms tool completed [{\"type\":\"content\",\"content\":{\"type\":\"text\",\"text\":\"\"}}]"
+      ]
+    }
+  },
+  "ok": true
+}

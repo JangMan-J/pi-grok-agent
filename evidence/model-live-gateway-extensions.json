@@ -1,0 +1,14 @@
+{
+  "mode": "gateway",
+  "model": "grok-4.7",
+  "piToolPolicy": "extensions",
+  "headlessPermissions": "allow",
+  "binary": "grok",
+  "tokenReturned": true,
+  "doneWritten": true,
+  "piToolExecutions": 0,
+  "grokNativeToolsObserved": "      5 [grok run_terminal_command];",
+  "piExit": 0,
+  "ok": true,
+  "output": "I'll read `token.txt` and write `done.txt` with the word finished.\n85cd42578c80dcfd387e"
+}

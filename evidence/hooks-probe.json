@@ -1,0 +1,157 @@
+{
+  "cwd": "/tmp/<scratch>",
+  "runs": [
+    {
+      "event": "pre_tool_use",
+      "cb": "pi-pre",
+      "tool": "run_terminal_command",
+      "toolUseId": "call-<id>",
+      "input": {
+        "command": "cat token.txt",
+        "description": "Print token.txt contents"
+      },
+      "sessionId": "<session-id>",
+      "keys": [
+        "hookCallbackId",
+        "hookEventName",
+        "sessionId",
+        "cwd",
+        "workspaceRoot",
+        "timestamp",
+        "transcriptPath",
+        "permissionMode",
+        "toolName",
+        "toolUseId",
+        "toolInput",
+        "toolInputTruncated"
+      ],
+      "reply": {
+        "decision": "deny",
+        "reason": "Pi policy: use the file tools, not the shell, for this task."
+      }
+    },
+    {
+      "event": "pre_tool_use",
+      "cb": "pi-pre",
+      "tool": "hashline_read",
+      "toolUseId": "call-<id>",
+      "input": {
+        "target_file": "/tmp/<scratch>/token.txt"
+      },
+      "sessionId": "<session-id>",
+      "keys": [
+        "hookCallbackId",
+        "hookEventName",
+        "sessionId",
+        "cwd",
+        "workspaceRoot",
+        "timestamp",
+        "transcriptPath",
+        "permissionMode",
+        "toolName",
+        "toolUseId",
+        "toolInput",
+        "toolInputTruncated"
+      ],
+      "reply": {
+        "decision": "continue"
+      }
+    },
+    {
+      "event": "post_tool_use",
+      "cb": "pi-post",
+      "tool": "hashline_read",
+      "toolUseId": "call-<id>",
+      "input": {
+        "target_file": "/tmp/<scratch>/token.txt"
+      },
+      "result": {
+        "type": "ReadFile",
+        "FileContent": {
+          "content": "1:xzl:yby→d690968c13580738\n2:ddg:yby→",
+          "absolute_path": "/tmp/<scratch>/token.txt",
+          "offset": null,
+          "raw_output": "d690968c13580738\n",
+          "total_lines": 2
+        }
+      },
+      "sessionId": "<session-id>",
+      "keys": [
+        "hookCallbackId",
+        "hookEventName",
+        "sessionId",
+        "cwd",
+        "workspaceRoot",
+        "timestamp",
+        "transcriptPath",
+        "permissionMode",
+        "toolName",
+        "toolUseId",
+        "toolInput",
+        "toolResult",
+        "toolInputTruncated",
+        "toolResultTruncated",
+        "durationMs",
+        "isBackgrounded"
+      ],
+      "reply": {
+        "decision": "continue",
+        "additionalContext": "PI-HOOK-CONTEXT: append the word HOOKED after the token in your final answer."
+      }
+    },
+    {
+      "event": "stop",
+      "cb": "pi-stop",
+      "sessionId": "<session-id>",
+      "keys": [
+        "hookCallbackId",
+        "hookEventName",
+        "sessionId",
+        "cwd",
+        "workspaceRoot",
+        "timestamp",
+        "transcriptPath",
+        "promptId",
+        "permissionMode",
+        "reason",
+        "stopHookActive",
+        "lastAssistantMessage",
+        "backgroundTasks",
+        "sessionCrons"
+      ],
+      "reply": {
+        "decision": "continue"
+      }
+    }
+  ],
+  "events": [
+    {
+      "event": "user_prompt_submit",
+      "cb": "pi-obs",
+      "sessionId": "<session-id>",
+      "keys": [
+        "hookCallbackId",
+        "hookEventName",
+        "sessionId",
+        "cwd",
+        "workspaceRoot",
+        "timestamp",
+        "promptId",
+        "permissionMode",
+        "prompt"
+      ]
+    }
+  ],
+  "checks": [
+    "pre_tool_use received for run_terminal_command, hashline_read",
+    "a shell call was denied by the Pi hook",
+    "post_tool_use received with results for hashline_read",
+    "Grok fell back to a file tool and returned the token",
+    "stop hook consulted at turn end"
+  ],
+  "sessionId": "<session-id>",
+  "stopReason": "end_turn",
+  "answer": "I'll print `token.txt` from the shell and reply with only the token.d690968c13580738",
+  "note": "additionalContext not reflected in the answer",
+  "ok": true
+}
