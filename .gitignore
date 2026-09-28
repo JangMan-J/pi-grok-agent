@@ -2,3 +2,4 @@ node_modules/
 *.log
 .pi/grok-images/
 package-lock.json
+dist/

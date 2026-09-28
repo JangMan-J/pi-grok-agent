@@ -39,11 +39,13 @@ This page is the reference for settings, commands, and operation. Start with the
 
 ## Install options
 
-The README uses a clone, `npm install --omit=dev`, and `pi install .` or `pi -e .`. With a clone, `npm run server` and the extension come from the same checkout.
+The README uses the npm package: `npm install -g pi-grok-agent` for the `pi-grok-gateway` command, and `pi install npm:pi-grok-agent` for the extension. Pi does not put a package's `bin` on `PATH`, so the gateway needs its own install. The gateway command runs compiled JavaScript from `dist/`, because Node does not strip TypeScript types under `node_modules`. The extension stays TypeScript: Pi loads it with its own loader.
+
+With a clone, `npm run server` and the extension (`pi -e .` or `pi install .`) come from the same checkout.
 
 Pi does not install dependencies for a local path. It loads the directory in place. Run `npm install --omit=dev` in the clone before the first start. Pi runs the same `npm install --omit=dev` when it installs a git source.
 
-A git install (`pi install git:github.com/JangMan-J/pi-grok-agent`) is not tested. It would still need a way to run the gateway of the same version: `npm run server` in a checkout, or the `pi-grok-gateway` bin from `npm install -g <path-or-tarball>`. Pi does not put a package's `bin` on `PATH`. Use the clone.
+A git install (`pi install git:github.com/JangMan-J/pi-grok-agent`) installs the extension only. Run the gateway of the same version from a clone (`npm run server`) or from the npm install (`pi-grok-gateway`). All three install paths are recorded in [launch-verification.md](launch-verification.md).
 
 ## Models and Pi controls
 
@@ -348,7 +350,8 @@ Sanitized results from the run recorded in [launch-verification.md](launch-verif
 
 | Symptom | Cause and action |
 | --- | --- |
-| Pi reports that the extension failed to load, with `ENOENT` for `grok-ws.secret` | The gateway never ran with this agent directory. Run `npm run server` once, or set `GROK_AGENT_SECRET` in both terminals. |
+| `Grok gateway secret not found at …` on a Grok turn | The gateway never ran with this agent directory. Start `pi-grok-gateway` (or `npm run server` in a clone) once; it creates the file. Then send the message again. Pi does not need a restart. |
+| Pi reports that the extension failed to load, with `ENOENT` for `grok-ws.secret` | A version before the lazy secret read. The gateway never ran with this agent directory. Run `npm run server` once, or set `GROK_AGENT_SECRET` in both terminals. |
 | Pi does not know the model `grok/grok-4.7` | The extension did not load. Use `pi -e <path-to-clone>` or `pi install <path-to-clone>`, and check the load error at startup. |
 | `Grok WebSocket handshake failed. Check the endpoint, server, and secret.` | The gateway is not running, the URL is different, or the two terminals use different secrets. Compare `GROK_ACP_URL` and `PI_CODING_AGENT_DIR` in both terminals. |
 | Gateway exits with `EADDRINUSE` | The port is in use. The gateway binds its port before it starts or adopts a leader, so the other gateway keeps running. See [Run a second, isolated gateway](#run-a-second-isolated-gateway). |

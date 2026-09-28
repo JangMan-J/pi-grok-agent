@@ -10,7 +10,7 @@ This file holds the capability ledger, launch gates, channel drafts, schedule, r
 - GitHub: `JangMan-J/pi-grok-agent` is already public.
 - npm: `"private": true` in `package.json` blocks npm publication only. It has no effect on GitHub visibility. The Pi package gallery lists npm packages, so it does not apply until the owner decides to publish.
 - Pi repository: the installed Pi 0.87.1 `package.json` names `github.com/earendil-works/pi` (the research digests cite `pi0/pi-mono` and `badlogic/pi-mono`, which are wrong).
-- Install path: decided. Use the README clone: `git clone`, `npm install --omit=dev`, `npm run server`, then `pi -e .` or `pi install .` from that same checkout. A git `pi install` is not the install path.
+- Install path: npm. `npm install -g pi-grok-agent` for the `pi-grok-gateway` command, then `pi install npm:pi-grok-agent`. The clone and `pi install git:` remain alternatives. All three pass in a clean `HOME` ([launch-verification.md](launch-verification.md#install-paths-and-first-run-2026-09-28)); the npm path was checked against a local registry and needs the owner's publication.
 - Pi compatibility: tested with Pi 0.87.1 only. Other Pi versions are untested. Node.js 22.19 is Pi's minimum. This package is tested only on Node.js 26.10.0. Do not write "Pi 0.87+".
 - GitHub About, applied 2026-09-28: the description and topics from [docs/github-presentation.md](github-presentation.md) are live, and [docs/assets/social-preview.png](assets/social-preview.png) is the social preview (the served image matched the committed PNG by SHA-256). Details in section 5.1.
 
@@ -80,13 +80,13 @@ Each gate must pass before the first public post. Record runtime results in [`do
 
 | Gate | Condition | Owner |
 | --- | --- | --- |
-| G2 | The README install path runs end to end in a clean `HOME` with a separate `PI_CODING_AGENT_DIR`. | Main |
-| G3 | First-run failure is known: what Pi shows when the secret file is missing and the extension loads. Document it or make the extension fail gently. A globally installed package loads in every Pi session. | Main |
+| G2 | The README install path runs end to end in a clean `HOME` with a separate `PI_CODING_AGENT_DIR`. Passed 2026-09-28 for the clone, git, and npm (local registry) paths. The npm path needs a recheck against the public registry after publication. | Main |
+| G3 | Closed 2026-09-28. Pi 0.87.1 exits on any extension load error, so a missing secret file stopped Pi for every model. The secret is now read at connect time: Pi starts, and a Grok turn names the file and the gateway command (`src/config.ts` `readSecretFile`, `test/extension.test.ts`, `test/gateway.test.ts`). | Main |
 | G4 | Live claims have current results in [docs/launch-verification.md](launch-verification.md), with Node, Pi, and Grok versions. README claims without a result are reworded. Ordinary verification is already authorized. Run of 2026-09-28: 8 probes passed on Node.js 26.10.0, Pi 0.87.1, Grok Build 1.0.41. Steering effect and reconnect remain uncovered. | Main |
 | G5 | Closed in code: the registered `input` handler acts only while the active provider is `grok` (`src/model.ts`, `test/extension.test.ts`). The live effect of an interjection on a running turn is still unverified, so keep steering out of the demo until a raw take shows it. | Main |
 | G6 | README and `docs/first-class-model.md` fixes found in review (Node 22.19, server first, second-gateway hazard, qualified claims, broken references). | Main |
 | G7 | Sanitized recordings and evidence. Before any recording, screenshot, transcript, or `evidence/` file is committed or posted, remove or redact prompts that are not demo prompts, `/grok debug` output and hook feedback that show paths, session IDs, or tokens, the bearer secret, account details, and home paths (use `~/`). `evidence/` is not in `.gitignore`, so check `git status` before a commit. | Owner, Main |
-| G8 | A demo recorded from a real run, per [`docs/demo.md`](demo.md), after G7. | Owner |
+| G8 | A demo recorded from a real run, per [`docs/demo.md`](demo.md), after G7. A take from 2026-09-28 exists, edited with title and end cards and the home path masked (checked by OCR on every quarter second of the turn). Not in the repository. | Owner |
 | G9 | Channel links and rules checked on the day of each post (section 5). | Owner |
 | G10 | The owner can answer replies for 48 hours after each post. | Owner |
 
@@ -181,7 +181,7 @@ Read the subreddit rules first. It limits self-promotion. Lead with the use case
 
 `BubblePtr/awesome-pi` asks for a PR with name, link, description, and install command. Check its current format first.
 
-> - [pi-grok-agent]({repo URL}) - Grok Build as a Pi model provider. Grok keeps its native tools. Pi gates them and lends extension tools. Setup: see the README (clone, `npm install`, `npm run server`, then load in Pi).
+> - [pi-grok-agent]({repo URL}) - Grok Build as a Pi model provider. Grok keeps its native tools. Pi gates them and lends extension tools. Setup: `npm install -g pi-grok-agent`, `pi install npm:pi-grok-agent`, run `pi-grok-gateway`.
 
 `shaftoe/awesome-pi-coding-agent` says it is automatically curated. Do not open a PR there.
 
@@ -284,18 +284,18 @@ OS:
 Node version (node -v):
 Pi version (pi --version):
 Grok Build version (grok --version):
-Install path (documented path is a clone; note if you used something else):
-Last step that worked (npm install / npm run server / Pi loaded / first Grok turn):
+Install path (npm, git, or clone):
+Last step that worked (npm install / gateway started / Pi loaded / first Grok turn):
 Error text, if any (redact paths, session IDs, and prompts you do not want public):
 What you tried the provider on:
 ```
 
 ## 9. Owner decisions still open
 
-Decided: the install path is the README clone (`git clone`, `npm install --omit=dev`, `npm run server`, then `pi -e .` or `pi install .` from that checkout). A git `pi install` is not the install path.
-- npm publication: remove `private: true` when the owner decides. Until then, make no gallery or `npm:` install claims.
+Decided: the install path is npm (`npm install -g pi-grok-agent`, `pi install npm:pi-grok-agent`). Open: npm publication (remove `"private": true`, `npm publish`).
+- npm publication: remove `private: true` and publish when the owner decides. The README already documents the `npm:` install, so push the README change together with the publication, not before.
 - Whether to commit sanitized `evidence/` results (G7).
-- Whether to fix G3 in code before launch. (G5 is fixed in code; its live check is a demo gate.)
+- G3 is fixed in code. G5 is fixed in code; its live check is a demo gate.
 - Video scope: document "path only", or add support.
 - Which channels to use, and the handles to post from.
 

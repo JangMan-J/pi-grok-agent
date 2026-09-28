@@ -13,7 +13,7 @@ After [setup](#quick-start), select Grok like any Pi model:
 pi --model grok/grok-4.7
 ```
 
-Status: version 0.1.0, not published to npm. Install it from a clone. Developed and tested on Linux with Node.js 26.10.0, Pi 0.87.1, and Grok Build 1.0.41. Other versions and platforms are untested.
+Status: version 0.1.0. Developed and tested on Linux with Node.js 26.10.0, Pi 0.87.1, and Grok Build 1.0.41. Other versions and platforms are untested.
 
 This package connects an agent, not the xAI chat-completions API. It needs a logged-in Grok Build CLI and a local gateway.
 The tool gates are not an operating-system sandbox.
@@ -33,44 +33,45 @@ Grok usage counts against your Grok account. Pi shows the cost that Grok reports
 
 ## Quick start
 
-Clone the repository and install the runtime dependencies:
+Install the gateway command and the Pi extension:
 
 ```sh
-git clone https://github.com/JangMan-J/pi-grok-agent.git
-cd pi-grok-agent
-npm install --omit=dev
+npm install -g pi-grok-agent
+pi install npm:pi-grok-agent
 ```
 
 Start the gateway in its own terminal and keep it open:
 
 ```sh
-npm run server
+pi-grok-gateway
 ```
-
-The same gateway is the package's `pi-grok-gateway` command (`npx pi-grok-gateway` from the clone). It runs in any directory, so you do not need the checkout as the working directory. Nothing starts it for you: the extension only reads the secret the gateway creates.
 
 When the gateway is ready, it prints a line that starts with `Grok WebSocket ACP ready at ws://127.0.0.1:2419/ws`.
-The first start creates the shared secret `~/.pi/agent/grok-ws.secret` with mode 0600.
+The first start creates the shared secret `~/.pi/agent/grok-ws.secret` with mode 0600. Nothing starts the gateway for you.
 
-In a second terminal, try the package for one Pi process without installing it:
-
-```sh
-cd pi-grok-agent
-pi -e . --model grok/grok-4.7
-```
-
-To load it in every Pi session, install it from the clone:
+In a second terminal:
 
 ```sh
-pi install .
 pi --model grok/grok-4.7
 ```
 
-After `pi install .`, Pi loads this extension at every start, for every model. The extension reads the secret file when it loads, so run `npm run server` once before you start Pi. To remove the package, run `pi remove` with the path of the clone.
+Pi loads the extension at every start, for every model. If the gateway is not running yet, Pi still starts, and the first Grok turn tells you to start it. Keep the two installs at the same version. To remove them, run `pi remove npm:pi-grok-agent` and `npm uninstall -g pi-grok-agent`.
+
+### From a clone
+
+```sh
+git clone https://github.com/JangMan-J/pi-grok-agent.git
+cd pi-grok-agent
+npm install --omit=dev
+npm run server              # terminal A: the gateway
+pi -e . --model grok/grok-4.7   # terminal B: this Pi process only; or pi install . for every session
+```
+
+`pi install git:github.com/JangMan-J/pi-grok-agent` also works. It installs only the extension, so run the gateway from a clone or from the npm install.
 
 ## First result
 
-In the Pi session from the quick start, send this prompt from the clone directory:
+Start Pi in any project directory that has a `package.json`, and send this prompt:
 
 ```text
 Read package.json and tell me the package name and the npm scripts. Do not change files.
@@ -80,7 +81,7 @@ Expected result:
 
 - One line for each Grok tool call, for example `✓ grok read_file …` or `✓ grok hashline_read …`, with its duration. Grok chooses the tool.
 - Thinking text that contains `[grok <tool>]` lines.
-- An answer that names `pi-grok-agent` and the scripts `test`, `check`, `server`, and `test:live`.
+- An answer that names the package and its scripts.
 - A footer cost that comes from Grok's usage report.
 
 Then run `/grok debug`. It shows the gateway connection, the Grok session ID, the permission modes, token usage, and the lent Pi tools.
@@ -130,7 +131,7 @@ Images that you attach in Pi go to Grok as a temporary file path under the syste
 
 ## Limitations
 
-- The gateway must run before Pi starts. If the secret file is missing, the extension does not load.
+- The gateway must run before the first Grok turn. Until it has created its secret file, Grok turns fail with a message that names the file and the command.
 - Run one gateway for each port and leader socket. A second `npm run server` with the default settings exits with `EADDRINUSE` and leaves the running gateway and its leader alone. [Run a separate gateway](docs/usage.md#run-a-second-isolated-gateway) for a demo or a test.
 - Grok's native tool calls are not Pi tool calls. Pi records them as thinking text and `grok-tool` entries, and no model receives those entries.
 - Pi compaction and Grok compaction are separate. Pi sends only the new messages of each turn. Only when it creates a new Grok session does it also send the earlier Pi transcript as text, cut to the last 60,000 characters.
