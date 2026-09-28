@@ -122,7 +122,7 @@ When a Grok tool result has the type `ImageGen`, `ImageEdit`, `ImageToVideo`, `R
 
 After the turn, Pi shows a `grok-media` message with the file path. PNG, JPEG, WebP, and GIF images also show inline when the terminal supports images. PNG shows directly. Pi converts JPEG, WebP, and GIF to PNG with `magick` first. Without `magick`, you see only the path for those formats. Video files show as a path only. Pi does not play video.
 
-Development runs probed `image_gen` only, and their results are not in this repository. The image-edit and video result types are recognized in code but not yet probed with a live Grok run. The media message is for display only. Pi does not send it back to Grok.
+Live probes cover `image_gen` only (`evidence/image-probe.json`, run recorded in [docs/launch-verification.md](docs/launch-verification.md)). The image-edit and video result types are recognized in code but not yet probed with a live Grok run. The media message is for display only. Pi does not send it back to Grok.
 
 Images that you attach in Pi go to Grok as a temporary file path under the system temp directory (`pi-grok-images`). Grok reads the file with its own tools.
 
