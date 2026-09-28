@@ -1,0 +1,15 @@
+{
+  "cwd": "/tmp/pi-grok-rpc-t10CKg",
+  "checks": [
+    "installed command loaded with the user extension set",
+    "direct command used native Grok tools and delivered the answer to Pi"
+  ],
+  "ok": false,
+  "error": "No Grok permission dialog reached Pi",
+  "notifications": [
+    "Offline: OpenRouter scope cannot be verified. openrouter-fresh models are hidden; set OPENROUTER_FRESH_API_KEY or /login openrouter-fresh, then /reload.",
+    "Offline: OpenRouter scope cannot be verified. OpenRouter models are hidden; fix the connection or credentials, then /reload.",
+    "Grok session 01a0e4c8-3e05-7d00-9468-9e278e6654dc connected."
+  ],
+  "stderr": ""
+}

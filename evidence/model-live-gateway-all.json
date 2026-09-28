@@ -1,0 +1,14 @@
+{
+  "mode": "gateway",
+  "model": "grok-4.7",
+  "piToolPolicy": "all",
+  "headlessPermissions": "allow",
+  "binary": "grok",
+  "tokenReturned": true,
+  "doneWritten": true,
+  "piToolExecutions": 0,
+  "grokNativeToolsObserved": "      5 [grok hashline_read];      5 [grok write];",
+  "piExit": 0,
+  "ok": true,
+  "output": "7424d8321b663cc5af7e"
+}

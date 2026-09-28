@@ -1,0 +1,16 @@
+{
+  "skill": "simple-english",
+  "invocation": "pi -p --model grok/grok-4.7 --skill ~/.agents/skills/simple-english \"/skill:simple-english Rewrite notes.md ...\"",
+  "promptWrapper": "<skill name=... location=<abs path>> + \"References are relative to <dir>\" + SKILL.md body + user instruction",
+  "piToolExecutions": 0,
+  "grokNativeTools": [
+    "hashline_read",
+    "run_terminal_command",
+    "list_dir",
+    "write"
+  ],
+  "lintGateRunByGrok": true,
+  "resultLint": "0 error(s), 0 warning(s)",
+  "skillDisclaimerHonored": true,
+  "runTranscript": "evidence/skill-probe-run.jsonl"
+}

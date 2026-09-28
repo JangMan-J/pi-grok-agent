@@ -1,0 +1,14 @@
+{
+  "ok": true,
+  "model": "grok-4.7",
+  "grokSessionId": "01a0e5b5-9c43-75a2-9048-9799ba5a6b1a",
+  "turn1": {
+    "stop": "stop"
+  },
+  "gatewayRestartedBetweenTurns": true,
+  "turn2": {
+    "stop": "stop",
+    "tokenRecalled": true,
+    "reconnectNote": "[grok reconnected after: Grok WebSocket closed; session 01a0e5b5-9c43-75a2-9048-9799ba5a6b1a reloaded]"
+  }
+}

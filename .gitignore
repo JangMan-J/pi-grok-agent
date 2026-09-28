@@ -1,4 +1,5 @@
-node_modules/
+evidence/
+node_modulee
 *.log
 .pi/grok-images/
 package-lock.json

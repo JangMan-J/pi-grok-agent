@@ -1,0 +1,14 @@
+{
+  "inferenceRequests": 0,
+  "ok": true,
+  "clientASession": "01a0e4dd-6c69-7791-94bd-14836ad5648e",
+  "clientBSession": "01a0e4dd-6cc1-7191-be00-a8aa85cb3a11",
+  "configRequestSentOn": "A",
+  "configResponseReceivedOn": "A",
+  "configResponsePresent": true,
+  "bothClientsStillRespond": true,
+  "clientAUpdatesForSessionA": [],
+  "clientBUpdatesForSessionA": [
+    "config_option_update"
+  ]
+}

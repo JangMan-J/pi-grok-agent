@@ -1,0 +1,15 @@
+{
+  "ok": false,
+  "model": "grok-4.7",
+  "grokSessionId": "01a0e601-b0ad-7412-9f5d-9aba1f8ab0b4",
+  "turn1": {
+    "stop": "stop"
+  },
+  "disruption": "leader",
+  "gatewayPidUnchanged": true,
+  "turn2": {
+    "stop": "error",
+    "error": "ACP connection closed",
+    "tokenRecalled": false
+  }
+}

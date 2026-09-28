@@ -1,0 +1,157 @@
+{
+  "cwd": "/tmp/grok-hooks-probe-S6emEB",
+  "runs": [
+    {
+      "event": "pre_tool_use",
+      "cb": "pi-pre",
+      "tool": "run_terminal_command",
+      "toolUseId": "call-afd8a9cf-30dd-4a9f-9a45-c2c535a97e6f-0",
+      "input": {
+        "command": "cat token.txt",
+        "description": "Print token.txt contents"
+      },
+      "sessionId": "01a0e556-b4cd-7102-8561-06df1b8b42db",
+      "keys": [
+        "hookCallbackId",
+        "hookEventName",
+        "sessionId",
+        "cwd",
+        "workspaceRoot",
+        "timestamp",
+        "transcriptPath",
+        "permissionMode",
+        "toolName",
+        "toolUseId",
+        "toolInput",
+        "toolInputTruncated"
+      ],
+      "reply": {
+        "decision": "deny",
+        "reason": "Pi policy: use the file tools, not the shell, for this task."
+      }
+    },
+    {
+      "event": "pre_tool_use",
+      "cb": "pi-pre",
+      "tool": "hashline_read",
+      "toolUseId": "call-6e8cf8b9-5cf4-4a71-aedc-c764db539b62-1",
+      "input": {
+        "target_file": "/tmp/grok-hooks-probe-S6emEB/token.txt"
+      },
+      "sessionId": "01a0e556-b4cd-7102-8561-06df1b8b42db",
+      "keys": [
+        "hookCallbackId",
+        "hookEventName",
+        "sessionId",
+        "cwd",
+        "workspaceRoot",
+        "timestamp",
+        "transcriptPath",
+        "permissionMode",
+        "toolName",
+        "toolUseId",
+        "toolInput",
+        "toolInputTruncated"
+      ],
+      "reply": {
+        "decision": "continue"
+      }
+    },
+    {
+      "event": "post_tool_use",
+      "cb": "pi-post",
+      "tool": "hashline_read",
+      "toolUseId": "call-6e8cf8b9-5cf4-4a71-aedc-c764db539b62-1",
+      "input": {
+        "target_file": "/tmp/grok-hooks-probe-S6emEB/token.txt"
+      },
+      "result": {
+        "type": "ReadFile",
+        "FileContent": {
+          "content": "1:akj:bty→b026b916030b3373\n2:ddg:bty→",
+          "absolute_path": "/tmp/grok-hooks-probe-S6emEB/token.txt",
+          "offset": null,
+          "raw_output": "b026b916030b3373\n",
+          "total_lines": 2
+        }
+      },
+      "sessionId": "01a0e556-b4cd-7102-8561-06df1b8b42db",
+      "keys": [
+        "hookCallbackId",
+        "hookEventName",
+        "sessionId",
+        "cwd",
+        "workspaceRoot",
+        "timestamp",
+        "transcriptPath",
+        "permissionMode",
+        "toolName",
+        "toolUseId",
+        "toolInput",
+        "toolResult",
+        "toolInputTruncated",
+        "toolResultTruncated",
+        "durationMs",
+        "isBackgrounded"
+      ],
+      "reply": {
+        "decision": "continue",
+        "additionalContext": "PI-HOOK-CONTEXT: append the word HOOKED after the token in your final answer."
+      }
+    },
+    {
+      "event": "stop",
+      "cb": "pi-stop",
+      "sessionId": "01a0e556-b4cd-7102-8561-06df1b8b42db",
+      "keys": [
+        "hookCallbackId",
+        "hookEventName",
+        "sessionId",
+        "cwd",
+        "workspaceRoot",
+        "timestamp",
+        "transcriptPath",
+        "promptId",
+        "permissionMode",
+        "reason",
+        "stopHookActive",
+        "lastAssistantMessage",
+        "backgroundTasks",
+        "sessionCrons"
+      ],
+      "reply": {
+        "decision": "continue"
+      }
+    }
+  ],
+  "events": [
+    {
+      "event": "user_prompt_submit",
+      "cb": "pi-obs",
+      "sessionId": "01a0e556-b4cd-7102-8561-06df1b8b42db",
+      "keys": [
+        "hookCallbackId",
+        "hookEventName",
+        "sessionId",
+        "cwd",
+        "workspaceRoot",
+        "timestamp",
+        "promptId",
+        "permissionMode",
+        "prompt"
+      ]
+    }
+  ],
+  "checks": [
+    "pre_tool_use received for run_terminal_command, hashline_read",
+    "a shell call was denied by the Pi hook",
+    "post_tool_use received with results for hashline_read",
+    "Grok fell back to a file tool and returned the token",
+    "additionalContext from the Pi hook reached the model",
+    "stop hook consulted at turn end"
+  ],
+  "sessionId": "01a0e556-b4cd-7102-8561-06df1b8b42db",
+  "stopReason": "end_turn",
+  "answer": "I'll print `token.txt` and reply with only the token.The shell was blocked, so I’ll read `token.txt` with a file tool.b026b916030b3373 HOOKED",
+  "ok": true
+}

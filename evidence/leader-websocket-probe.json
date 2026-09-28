@@ -1,0 +1,16 @@
+{
+  "inferenceRequests": 0,
+  "backend": "leader gateway",
+  "ok": true,
+  "clientASession": "01a0e4f3-fc03-7802-bc4f-446983a15df4",
+  "clientBSession": "01a0e4f3-fcc3-7ad1-84f6-a203fc07b4ff",
+  "configRequestSentOn": "A",
+  "configResponseReceivedOn": "A",
+  "configResponsePresent": true,
+  "bothClientsStillRespond": true,
+  "clientAUpdatesForSessionA": [
+    "config_option_update"
+  ],
+  "clientBUpdatesForSessionA": [],
+  "reconnect": "C reloaded session A and received its updates; B stayed isolated and usable"
+}

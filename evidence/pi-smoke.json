@@ -1,0 +1,17 @@
+{
+  "cwd": "/tmp/pi-grok-rpc-mNWfhI",
+  "checks": [
+    "installed command loaded with the user extension set",
+    "direct command used native Grok tools and delivered the answer to Pi",
+    "native permission policy allowed the test write without asking Pi; live denial not exercised",
+    "reconnect retained the session mapping and displayed recovered output",
+    "Pi session replacement created a different Grok session",
+    "no Pi model inference was invoked by the direct commands"
+  ],
+  "livePermissionDialog": false,
+  "ok": true,
+  "sessionIds": [
+    "01a0e4f4-fb73-7f51-97db-43172647fb5f",
+    "01a0e4f5-7174-7940-9350-e902ba7d8c3a"
+  ]
+}

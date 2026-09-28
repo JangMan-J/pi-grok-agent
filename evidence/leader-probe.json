@@ -1,0 +1,11 @@
+{
+  "inferenceRequests": 0,
+  "socketPath": "/tmp/grok-leader-probe-lTsSrG/leader.sock",
+  "ok": true,
+  "bothClientsRespond": true,
+  "clientAUpdatesForSessionA": [
+    "config_option_update"
+  ],
+  "clientBUpdatesForSessionA": [],
+  "leaderPid": 112845
+}
