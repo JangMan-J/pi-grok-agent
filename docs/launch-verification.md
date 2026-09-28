@@ -47,6 +47,11 @@ Sign-in, 2026-09-28 (Grok Build 1.0.41, scratch `HOME`, one disposable login app
 - A gateway that is already running picks up a login made while it runs: before, the connection failed with `Grok Build is not signed in. Run /grok login, ...`; after the credential file appeared, the next open authenticated and `session/new` succeeded, with no gateway or leader restart.
 - x.ai rotates refresh tokens and keeps the previous one valid: a refresh returned a new token, a second refresh with the old token succeeded, and the new token still worked afterwards.
 
+Free Grok account, 2026-09-28 (the owner's own login, Grok Build 1.0.41):
+
+- Grok Build works on a free account: `grok models` lists `grok-4.7` only, and headless turns through `pi-grok-agent` returned `PONG`, and a read-only tool turn answered correctly.
+- Found: `pi-grok-agent` 0.1.0 never sends the model picked in Pi to Grok. Turns for `grok-4.7-build-fast`, `grok-4.6`, and `grok-4.5` all answered, but Grok's session records show `current_model_id: grok-4.7` for every one. Fixed after 0.1.0: Pi sets Grok's `model` config option, and a model the account lacks fails with `grok-4.6 is not available on this Grok account. Available: grok-4.7. Pick one of those in /models.` Checked live on the same account.
+
 Found on the packed layout and fixed before the npm run: the gateway `bin` failed under `node_modules` with `ERR_UNSUPPORTED_NODE_MODULES_TYPE_STRIPPING`, and the extension failed with `Cannot find module 'zod/v4'`, because `@agentclientprotocol/sdk` declares `zod` as a peer and Pi installs with `--legacy-peer-deps`.
 
 Node.js 22.19 is Pi's minimum. It is not a tested version of this package. Do not write "Pi 0.87+".
