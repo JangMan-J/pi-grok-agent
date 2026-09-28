@@ -119,8 +119,8 @@ Agent discovery benefits from clear task descriptions and accessible evidence, n
 1. Review the presentation-only diff alongside the architecture changes.
 2. Close the runtime gates in [launch.md](launch.md) before announcing availability.
 3. Publish the README, issue form, and assets in the same revision.
-4. Confirm the About text and topics. Applied and verified on 2026-09-28.
-5. Confirm the social preview. Uploaded and verified on 2026-09-28.
+4. Check the About text and topics. Applied and verified on 2026-09-28.
+5. Check the social preview. Uploaded and verified on 2026-09-28.
 6. Inspect the published README on GitHub in light and dark themes, and at a narrow width.
 7. Open the first-run issue form without submitting it.
 8. Check third-party link previews after their caches refresh. GitHub's `og:image` is already verified.
