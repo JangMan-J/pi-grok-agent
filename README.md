@@ -52,15 +52,15 @@ Model availability in Pi is determined by your [account access](https://grok.com
 
 ## Documentation
 
-[docs/usage.md](docs/usage.md) — settings, lent tools, permissions, the gateway guard, hooks, `/grok` commands, troubleshooting
-[docs/architecture-diagram.md](docs/architecture-diagram.md) — the diagram in mermaid and ASCII
-[docs/first-class-model.md](docs/first-class-model.md) — design and turn mapping
-[docs/launch-verification.md](docs/launch-verification.md) — recorded live runs behind the verified claims
+- [docs/usage.md](docs/usage.md) — settings, lent tools, permissions, the gateway guard, hooks, `/grok` commands, troubleshooting
+- [docs/architecture-diagram.md](docs/architecture-diagram.md) — the diagram in mermaid and ASCII
+- [docs/first-class-model.md](docs/first-class-model.md) — design and turn mapping
+- [docs/launch-verification.md](docs/launch-verification.md) — recorded live runs behind the verified claims
 
 ## Feedback
 
-[Open an issue](https://github.com/JangMan-J/pi-grok-agent/issues) with the output of `node --version`, `pi --version`, and `grok --version`, the model ID, and a short redacted excerpt of `/grok debug`.
+- [Open an issue](https://github.com/JangMan-J/pi-grok-agent/issues) with the output of `node --version`, `pi --version`, and `grok --version`, the model ID, and a short redacted excerpt of `/grok debug`.
 
 ## License
 
-[Apache License 2.0](LICENSE).
+- [Apache License 2.0](LICENSE).
