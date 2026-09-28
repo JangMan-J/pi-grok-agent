@@ -225,3 +225,9 @@ Live probes, each against the running gateway:
 Unit tests cover the turn split around a lent tool call, abort and abort-then-resend, custom messages excluded from prompts, usage mapping, hook classification and gates, guard tier validation, question dialogs, and media copies.
 
 Design notes and the verification ledger are in `docs/first-class-model.md`. Dependencies: the official ACP TypeScript SDK 1.5.0 and `ws` 8.22.0.
+
+## License
+
+Copyright 2026 JangManJ
+
+Licensed under the Apache License, Version 2.0. See [LICENSE](LICENSE).
