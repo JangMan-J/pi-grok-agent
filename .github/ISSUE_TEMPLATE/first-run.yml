@@ -1,0 +1,63 @@
+name: First-run problem
+description: Tell us where setup or the first Grok turn failed.
+title: "[First run]: "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Report one setup problem here.
+        For questions or feature ideas, open a blank issue.
+        Remove tokens, secrets, account details, session IDs, and private paths.
+        Do not attach raw logs or Pi session files.
+        Use a short excerpt from a synthetic project.
+  - type: textarea
+    id: versions
+    attributes:
+      label: Environment
+      description: Include your OS and the output of these version commands.
+      placeholder: |
+        OS:
+        node --version:
+        pi --version:
+        grok --version:
+        Model ID:
+    validations:
+      required: true
+  - type: dropdown
+    id: last-step
+    attributes:
+      label: Last step that worked
+      options:
+        - None yet
+        - Cloned the repository
+        - Installed npm dependencies
+        - Started the gateway
+        - Loaded the extension in Pi
+        - Completed the first Grok turn
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: How to reproduce
+      description: >-
+        Include the load method (pi -e . or pi install .), commands,
+        and a safe example prompt.
+    validations:
+      required: true
+  - type: textarea
+    id: result
+    attributes:
+      label: Expected and actual result
+      description: Include a short, redacted error excerpt if one is available.
+    validations:
+      required: true
+  - type: checkboxes
+    id: privacy
+    attributes:
+      label: Before posting
+      options:
+        - label: >-
+            I removed secrets, tokens, account details, session IDs,
+            and private paths.
+          required: true
