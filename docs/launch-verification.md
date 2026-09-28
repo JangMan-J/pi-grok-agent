@@ -40,6 +40,12 @@ Same versions. Each run used a new `HOME` under `/tmp` that held only a copy of 
 | G3, before | Agent directory with this extension and no `grok-ws.secret`, no gateway | Pi 0.87.1 exited with status 1 for every model and mode: `Failed to load extension ".../src/model.ts": ... ENOENT ... grok-ws.secret`, then `Hint: Start without extensions using "pi -ne"`. Pi exits on any extension load error. |
 | G3, after | Same, with the secret read at connect time | The TUI starts with `grok-4.7` selected. A Grok turn prints `Grok gateway secret not found at <file>. Start the gateway once (pi-grok-gateway, or npm run server in the clone); it creates the file. Then send the message again.` `test/gateway.test.ts` covers the reconnect after the file appears. |
 
+Sign-in, 2026-09-28 (Grok Build 1.0.41, scratch `HOME`, one disposable login approved by the owner and signed out afterwards):
+
+- A signed-out Grok offers one ACP auth method, `grok.com`. With Pi's stored xAI OAuth token in `XAI_API_KEY`, `session/new` still fails with `Authentication required`. Pi's `/login` xAI entry and `grok login` use the same OAuth client (`b1a00492-...` on `https://auth.x.ai`), but Grok Build accepts only its own stored login for agent sessions.
+- A gateway that is already running picks up a login made while it runs: before, the connection failed with `Grok Build is not signed in. Run /grok login, ...`; after the credential file appeared, the next open authenticated and `session/new` succeeded, with no gateway or leader restart.
+- x.ai rotates refresh tokens and keeps the previous one valid: a refresh returned a new token, a second refresh with the old token succeeded, and the new token still worked afterwards.
+
 Found on the packed layout and fixed before the npm run: the gateway `bin` failed under `node_modules` with `ERR_UNSUPPORTED_NODE_MODULES_TYPE_STRIPPING`, and the extension failed with `Cannot find module 'zod/v4'`, because `@agentclientprotocol/sdk` declares `zod` as a peer and Pi installs with `--legacy-peer-deps`.
 
 Node.js 22.19 is Pi's minimum. It is not a tested version of this package. Do not write "Pi 0.87+".
