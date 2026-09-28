@@ -98,7 +98,11 @@ export class GrokModelConnection {
           const event = String(params.hookEventName ?? '');
           const key = event === 'stop' ? `stop:${params.sessionId ?? params.session_id ?? ''}` : `${event}:${params.toolUseId ?? ''}`;
           this.ack(key, { check: event === 'post_tool_use' || event === 'stop' });
-          return handler ? handler(params, { dialog: () => this.ack(key, { dialog: true }) }) : { decision: 'continue' };
+          if (handler) return handler(params, { dialog: () => this.ack(key, { dialog: true }) });
+          // No Pi session owns this Grok session (detached by /new or shutdown while a turn was still running).
+          // Pi's capability gate is gone, so tool use is denied rather than left to Grok's own permission mode.
+          if (event === 'pre_tool_use') return { decision: 'deny', reason: 'Pi detached from this Grok session; tool use is denied until a Pi session owns it again.' };
+          return { decision: 'continue' };
         })
         .onNotification('_x.ai/session_notification', (raw) => raw as any, ({ params }) => {
           this.sessions.get(params.sessionId ?? params.session_id)?.onSessionExt?.(params.update);

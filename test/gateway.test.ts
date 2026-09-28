@@ -153,3 +153,29 @@ test('ask mode: a slow human confirm is waited for as a dialog, not denied at th
   assert.deepEqual(received(s, 'r9').map((m) => m.result), [{ decision: 'continue' }], 'the human\'s answer, once');
   assert.deepEqual(session.hookLog.map((h) => h.decision), ['continue']);
 });
+
+test('a Grok turn that outlives its Pi session (/new, shutdown) is denied tool use, not waved through', async (t) => {
+  const s = scratch(); t.after(s.cleanup);
+  const port = await freePort();
+  const gw = startGateway(gatewayEnv(s, port));
+  t.after(() => stop(gw.child));
+  await gw.ready();
+  const connection = new GrokModelConnection({ url: `ws://127.0.0.1:${port}/ws`, secret: SECRET });
+  t.after(() => connection.close());
+  const session = new GrokModelSession(connection, 'pi-orphan', s.home);
+  session.piToolNames = ['read', 'edit', 'write', 'bash'];
+  await session.attach(undefined);
+  assert.equal(session.grokSessionId, 'fake-session');
+  session.detach();
+  const emit = (id: string, hookEventName: string, extra: Record<string, unknown> = {}) =>
+    connection.agent.notify('test/emit', { jsonrpc: '2.0', id, method: '_x.ai/hooks/run', params: { hookCallbackId: `pi-${hookEventName}`, hookEventName, sessionId: 'fake-session', cwd: s.home, ...extra } });
+  await emit('o1', 'pre_tool_use', { toolName: 'hashline_read', toolUseId: 'o1', toolInput: { path: 'a.ts' } });
+  await emit('o2', 'post_tool_use', { toolName: 'hashline_read', toolUseId: 'o2', toolInput: {}, toolResponse: {} });
+  await emit('o3', 'stop', { reason: 'end_turn' });
+  await until(() => received(s, 'o1').length >= 1 && received(s, 'o2').length >= 1 && received(s, 'o3').length >= 1, 'answers for the orphaned hooks', 4000);
+  assert.equal(received(s, 'o1')[0].result.decision, 'deny', 'even a read is denied: Pi\'s gate no longer applies');
+  assert.match(received(s, 'o1')[0].result.reason, /detached/);
+  assert.equal(received(s, 'o2')[0].result.decision, 'continue', 'post_tool_use has nothing to deny');
+  assert.equal(received(s, 'o3')[0].result.decision, 'continue', 'stop is not held open for an orphan');
+  assert.equal(session.hookLog.length, 0, 'the detached Pi session saw none of it');
+});

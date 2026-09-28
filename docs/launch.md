@@ -69,7 +69,7 @@ Three separate permission layers. Do not merge them in copy:
 - Deny and allow overrides (`denyGrokTools`, `allowGrokTools`, `PI_GROK_DENY_TOOLS`) are checked first in `capabilityGate` (`src/model/hooks.ts`). An explicit deny wins over an allow entry, and both win over the mirror.
 - Grok's own permission prompts are a different path. `grokMode` (`default`, `auto`, `yolo`) sets Grok's session mode (`yoloMode` and `autoMode` in `_meta`, `src/model/connection.ts`). `auto` and `yolo` remove Grok's confirmation prompts and are opt-in. With a UI, Pi shows the prompts as dialogs. Headless Pi uses `headlessPermissions`: the default `dialog` rejects, and `deny`, `reads`, `allow` are the other choices (`src/config.ts`).
 
-Hook failures fail open, as Grok's own hooks do. The gateway guard answers fail-closed when Pi does not acknowledge in time.
+Hook failures fail open, as Grok's own hooks do. The gateway guard answers fail-closed when Pi does not acknowledge in time. A Grok turn that outlives its Pi session (`/new` or shutdown while Grok is still running) gets `deny` on every `pre_tool_use`, because Pi's gate no longer applies to it (`_x.ai/hooks/run` fallback in `src/model/connection.ts`, `test/gateway.test.ts`).
 
 Isolated probes: with the isolation settings in `AGENTS.md`, the probes can run against a scratch gateway. Exclude `scripts/reconnect-probe.ts`. It hardcodes port 2419 and `~/.pi/agent/grok-ws.pid`, and it sends SIGTERM to that PID and to the leader, so it stops the production gateway.
 
