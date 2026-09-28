@@ -1,0 +1,35 @@
+{
+  "name": "pi-grok-agent",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Grok Build as a first-class Pi model over WebSocket ACP",
+  "keywords": [
+    "pi-package"
+  ],
+  "pi": {
+    "extensions": [
+      "./src/model.ts"
+    ]
+  },
+  "scripts": {
+    "test": "node --test test/*.test.ts",
+    "check": "tsc --noEmit",
+    "server": "node scripts/server.ts",
+    "test:live": "scripts/model-live.sh gateway && scripts/hooks-live.sh"
+  },
+  "dependencies": {
+    "@agentclientprotocol/sdk": "1.5.0",
+    "ws": "8.22.0"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-ai": "*",
+    "@earendil-works/pi-coding-agent": "*",
+    "@earendil-works/pi-tui": "*"
+  },
+  "devDependencies": {
+    "@types/node": "^26.0.0",
+    "@types/ws": "^8.18.1",
+    "typescript": "^6.0.0"
+  }
+}
