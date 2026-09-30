@@ -9,7 +9,7 @@ pi install npm:pi-grok-agent
 Run [Grok Build](https://docs.x.ai/build/overview) as an additional model provider in [Pi coding agent](https://github.com/earendil-works/pi). Grok keeps its native environment, tools, and session history. Pi provides the DIY harness, turn control, permission requests, and extensions.
 
 <details>
-<summary>▶ Watch the demo (1:20)</summary>
+<summary>Watch the demo (1:20)</summary>
 
 https://github.com/user-attachments/assets/affe029e-512a-4f46-8c19-59cc625fe65e
 
