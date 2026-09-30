@@ -17,7 +17,7 @@ Run [Grok Build](https://docs.x.ai/build/overview) as an additional model provid
 <details>
 <summary>Watch the demo (1:20)</summary>
 
-https://github.com/user-attachments/assets/affe029e-512a-4f46-8c19-59cc625fe65e
+[Play the demo video](https://github.com/user-attachments/assets/affe029e-512a-4f46-8c19-59cc625fe65e)
 
 </details>
 
