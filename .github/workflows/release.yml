@@ -1,0 +1,49 @@
+name: Release
+
+# A published GitHub Release tagged vX.Y.Z publishes that version to npm
+# and attaches the package file to the release.
+# npm trusts this workflow file (trusted publishing): no npm token is
+# stored, and npm adds a provenance record.
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: write # attach the package file to the release
+  id-token: write # npm trusted publishing and provenance
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: 26
+          registry-url: https://registry.npmjs.org
+      - name: Tag matches package.json version
+        run: |
+          want="v$(node -p 'require("./package.json").version')"
+          if [ "$want" != "$GITHUB_REF_NAME" ]; then
+            echo "Tag $GITHUB_REF_NAME, package.json $want" >&2
+            exit 1
+          fi
+      - run: npm install
+      - run: npm run check
+      - run: npm test
+        env:
+          PI_GROK_AUTOSTART: '0'
+      # Pack once, then publish and attach that same file,
+      # so the release asset is byte for byte what npm has.
+      - name: Pack
+        id: pack
+        run: echo "file=$(npm pack --silent)" >> "$GITHUB_OUTPUT"
+      - run: npm publish "$FILE"
+        env:
+          FILE: ${{ steps.pack.outputs.file }}
+      - name: Attach the package file to the release
+        run: gh release upload "$GITHUB_REF_NAME" "$FILE" --clobber
+        env:
+          FILE: ${{ steps.pack.outputs.file }}
+          GH_TOKEN: ${{ github.token }}
