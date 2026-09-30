@@ -108,9 +108,11 @@ Placeholders: `{repo URL}` is `https://github.com/JangMan-J/pi-grok-agent`. `{de
 
 Applied and verified on 2026-09-28 with owner authorization. The [publication record](github-presentation.md) contains the commands, public image URL, and hash.
 
-Live About description:
+Live About description (since 2026-09-30):
 
-> Grok Build as a model in the Pi coding agent. Keep Grok's native tools and history, with Pi's transcript, tool gates, dialogs, and extension tools.
+> Grok Build as a model in Pi. Grok keeps its tools, so Pi can put it to work.
+
+The 2026-09-28 description was: "Grok Build as a model in the Pi coding agent. Keep Grok's native tools and history, with Pi's transcript, tool gates, dialogs, and extension tools."
 
 Website: empty until a separate useful destination exists.
 
