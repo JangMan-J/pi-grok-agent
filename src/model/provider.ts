@@ -57,8 +57,8 @@ function usageFrom(turn: GrokTurnUsage | undefined): Usage {
   usage.input = Math.max(0, turn.inputTokens - turn.cachedReadTokens - turn.cacheCreationTokens);
   usage.output = turn.outputTokens;
   // Pi's context token calculation uses message.usage.totalTokens as the active conversation context size.
-  // Grok's turn_completed accounting is cumulative across all sub-calls in the turn (which can sum to >500k),
-  // whereas turn.contextTokens (from session/prompt response _meta.totalTokens) is Grok's actual context window size.
+  // Grok's turn_completed accounting is cumulative across all sub-calls in the turn (which can sum past the context window),
+  // whereas turn.contextTokens (from session/prompt response _meta.totalTokens) is the size of Grok's actual context.
   usage.totalTokens = turn.contextTokens ?? (usage.input + usage.output + usage.cacheRead + usage.cacheWrite);
   usage.cost = { input: turn.costUsd, output: 0, cacheRead: 0, cacheWrite: 0, total: turn.costUsd };
   return usage;
