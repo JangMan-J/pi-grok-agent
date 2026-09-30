@@ -73,8 +73,8 @@ GET gets 405, so Grok's client does not open an event stream. An unknown token g
 ## Permission prompts
 
 Grok sends `session/request_permission` for some native calls, for example a shell redirect that writes a file.
-Interactive Pi shows the dialog. Headless Pi answers by `headlessPermissions` (`dialog`, `deny`, `reads`, `allow`). The default `dialog` cancels without a UI.
-`grokMode` (`default`, `auto`, `yolo`) goes to Grok as `_meta.autoMode` or `_meta.yoloMode` on `session/new` and `session/load`. Grok decides which prompts it sends in each mode. `/grok perms yolo` acts only in Pi's hook and does not answer these prompts.
+Interactive Pi shows the dialog, unless `/grok perms` is `yolo`, which selects allow once. Headless Pi answers by `headlessPermissions` (`dialog`, `deny`, `reads`, `allow`). The default `dialog` cancels without a UI. `yolo` selects allow once without a UI as well.
+`grokMode` (`default`, `auto`, `yolo`) goes to Grok as `_meta.autoMode` or `_meta.yoloMode` on `session/new` and `session/load`. Grok decides which prompts it sends in each mode. `/grok perms yolo` does not change `grokMode`. When a prompt still arrives, Pi selects allow once (`permissionAnswer` in `src/model/permissions.ts`).
 
 ## Steering
 

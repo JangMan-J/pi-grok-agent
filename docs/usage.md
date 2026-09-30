@@ -92,13 +92,13 @@ The steer handler acts only while the active model is `grok/*`. After a switch t
 
 | Command | Effect |
 | --- | --- |
-| `/grok login` | Runs `grok login --device-auth` in the background and shows the URL and code as an entry and a notice. Grok may open the page itself, in your default browser. Approve it there; Pi reports when the login finished. Works before any Grok session exists. A running gateway picks up the new login on the next turn, without a restart. |
 | `/grok debug` | Shows the gateway URL and connection state, the Grok session ID, Grok mode, Pi permission mode, Grok context size, usage and cost totals, lent tools, and hook decision counts. |
+| `/grok login` | Runs `grok login --device-auth` in the background and shows the URL and code as an entry and a notice. Grok may open the page itself, in your default browser. Approve it there; Pi reports when the login finished. Works before any Grok session exists. A running gateway picks up the new login on the next turn, without a restart. |
 | `/grok perms` | Shows the Pi permission mode. |
 | `/grok perms auto` | Default. Mirrors the Pi session's tools onto Grok's tools. |
 | `/grok perms read-only` | Denies Grok's edit and shell tools, whatever tools the Pi session has. |
 | `/grok perms ask` | Mirrors, then shows a Pi confirm dialog for each Grok edit or shell call. Without a UI it acts as `read-only`. |
-| `/grok perms yolo` | Treats the Pi session as if it had `read`, `edit`, `write`, and `bash`, so the capability mirror allows Grok's edit and shell tools with no Pi confirm dialog. `denyGrokTools` still denies. Grok's own permission prompts still arrive. For autonomous work in a workspace you can lose. |
+| `/grok perms yolo` | Treats the Pi session as if it had `read`, `edit`, `write`, and `bash`, so the capability mirror allows Grok's edit and shell tools with no Pi confirm dialog. A Grok `session/request_permission` that still arrives is answered allow once, with no dialog. `denyGrokTools` still denies. `ask_user_question` still opens a dialog. For autonomous work in a workspace you can lose. |
 | `/grok plan on`, `/grok plan off` | Sets Grok's session mode to `plan` or `default` with `session/set_mode`. |
 | `/grok goal <objective>`, `goal status`, `goal pause`, `goal resume`, `goal clear` | Sends Grok's `/goal` command. This is a Grok turn outside Pi's model loop. |
 | `/grok compact [note]` | Sends Grok's `/compact` on Grok's own history. This is a Grok turn. |
@@ -117,9 +117,9 @@ Three separate settings affect Grok's tool calls:
 | `grokMode` | Grok's own permission mode, sent with `session/new` and `session/load` | `default` (default), `auto` (sets Grok's `autoMode`), `yolo` (sets Grok's `yoloMode`) |
 | `headlessPermissions` | Pi's answer to a Grok permission prompt when Pi has no UI | `dialog` (default), `deny`, `reads`, `allow` |
 
-A call must pass Pi's hook first. `/grok perms yolo` does not answer Grok's permission prompts, and `denyGrokTools` wins in every mode. `grokMode` decides which prompts Grok sends. Grok, not this package, defines what `auto` and `yolo` skip.
+A call must pass Pi's hook first. `denyGrokTools` wins in every mode. `/grok perms yolo` answers a permission prompt that still arrives by selecting allow once, and does not open a dialog. The other `/grok perms` modes leave the prompt to the dialog or to `headlessPermissions`. `grokMode` decides which prompts Grok sends. Grok, not this package, defines what `auto` and `yolo` skip.
 
-Grok asks for permission for some native tool calls, for example a shell command that writes a file with a redirect. Interactive Pi shows a selection dialog with Grok's options. If you dismiss the dialog, Grok gets `cancelled` and ends the turn.
+Grok asks for permission for some native tool calls, for example a shell command that writes a file with a redirect. Interactive Pi shows a selection dialog with Grok's options, unless `/grok perms` is `yolo`, which selects allow once. If you dismiss the dialog, Grok gets `cancelled` and ends the turn.
 
 Headless Pi (`pi -p`, RPC, or another agent process without a UI) uses `headlessPermissions`:
 
@@ -130,7 +130,7 @@ Headless Pi (`pi -p`, RPC, or another agent process without a UI) uses `headless
 | `reads` | Allow once for prompts of kind read, search, fetch, or think. Reject the rest. |
 | `allow` | Allow once. |
 
-A rejected or cancelled prompt ends the Grok turn. Pi records a completed message, not an abort. Pi records an abort only when Pi itself cancelled the turn.
+While `/grok perms` is `yolo`, Pi selects allow once and does not use this table. A rejected or cancelled prompt ends the Grok turn. Pi records a completed message, not an abort. Pi records an abort only when Pi itself cancelled the turn.
 
 When Grok calls `ask_user_question`, Pi shows one dialog for each question. The dialog has Grok's options and `Other` for free text. In plan mode it also has `Chat about this` and `Skip interview`. Headless Pi answers `cancelled`.
 
