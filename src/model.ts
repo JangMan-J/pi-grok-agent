@@ -87,7 +87,7 @@ export default async function grokModel(pi: ExtensionAPI) {
   /** Permission answers, hook settings, and the structured tool record sink. */
   function configure(session: GrokModelSession, ctx: ExtensionContext) {
     connection.hasUI = ctx.hasUI;
-    session.permission = answerFor(ctx);
+    session.permission = answerFor(ctx, () => session.permissionMode);
     session.ask = questionAnswerer(ctx);
     session.hookSettings = config.hooks;
     session.mediaDir = config.mediaDir;
@@ -101,8 +101,8 @@ export default async function grokModel(pi: ExtensionAPI) {
     return session;
   }
 
-  function answerFor(ctx: ExtensionContext) {
-    return permissionAnswer(ctx.hasUI, permissionDialog(ctx), config.headlessPermissions);
+  function answerFor(ctx: ExtensionContext, mode: () => 'yolo' | 'auto' | 'ask' | 'readonly') {
+    return permissionAnswer(ctx.hasUI, permissionDialog(ctx), config.headlessPermissions, mode);
   }
 
   const stream = createGrokStream(connection, { current: () => current, piTools: config.piTools });
@@ -205,12 +205,12 @@ export default async function grokModel(pi: ExtensionAPI) {
   // Two-level completion: the subcommand, then its arguments. Pi passes everything typed after "/grok ".
   // The first-level descriptions are the lines that used to print above the editor. They stay in the menu under it.
   const COMPLETIONS: Record<string, { args: { value: string; description: string }[]; description: string }> = {
-    perms: { description: '(yolo | auto | ask | read-only)', args: [{ value: 'yolo', description: 'expand Pi capabilities; Grok rules still apply' }, { value: 'auto', description: 'mirror Pi\'s tool set' }, { value: 'ask', description: 'confirm each edit or shell call' }, { value: 'read-only', description: 'deny edits and shell' }] },
+    login: { description: 'sign in to Grok Build (device code)', args: [] },
+    perms: { description: '(yolo | auto | ask | read-only)', args: [{ value: 'yolo', description: 'allow edits, shell, and Grok permission prompts' }, { value: 'auto', description: 'mirror Pi\'s tool set' }, { value: 'ask', description: 'confirm each edit or shell call' }, { value: 'read-only', description: 'deny edits and shell' }] },
     plan: { description: '(on | off)', args: [{ value: 'on', description: 'enter plan mode' }, { value: 'off', description: 'leave plan mode' }] },
     goal: { description: '(<objective> | status | pause | resume | clear)', args: [{ value: 'status', description: 'current goal' }, { value: 'pause', description: '' }, { value: 'resume', description: '' }, { value: 'clear', description: '' }] },
     compact: { description: '(note)', args: [] },
     debug: { description: '(brilliant information)', args: [] },
-    login: { description: 'sign in to Grok Build (device code)', args: [] },
   };
   pi.registerCommand('grok', {
     description: 'login | perms | plan | goal | compact | debug',

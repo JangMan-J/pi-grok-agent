@@ -14,7 +14,7 @@ export const PI_CORE_TOOLS = new Set(['read', 'bash', 'edit', 'write', 'grep', '
 /**
  * How the `grok` model provider answers Grok's native permission prompts when Pi has no UI (`-p`, Fabric workers).
  * `dialog` (default): ask in Pi's UI; without a UI, deny. `deny`: always reject. `allow`: always allow once.
- * `reads`: allow read-class prompts, deny the rest. Interactive Pi always shows the dialog.
+ * `reads`: allow read-class prompts, deny the rest. Interactive Pi shows the dialog, unless `/grok perms` is `yolo`, which selects allow once.
  */
 export type HeadlessPermissionPolicy = 'dialog' | 'deny' | 'reads' | 'allow';
 /**

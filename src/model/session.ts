@@ -79,8 +79,8 @@ export class GrokModelSession {
    * Pi-side permission mode for Grok's native tools, applied at pre_tool_use (so it holds even where Grok's own
    * rules would auto-allow): `auto` = capability mirror only; `readonly` = deny writes and shell regardless of Pi's
    * tools; `ask` = mirror, then a Pi dialog for every write or shell call; `yolo` = mirror as if Pi had read, edit,
-   * write, and bash, with no Pi dialog. `denyGrokTools` and Grok's own permission prompts still apply in every
-   * mode. Headless Pi treats `ask` as `readonly`.
+   * write, and bash, with no Pi dialog, and a Grok permission prompt is answered allow once. `denyGrokTools` still
+   * applies. `ask_user_question` still opens a dialog. Headless Pi treats `ask` as `readonly`.
    */
   permissionMode: 'yolo' | 'auto' | 'ask' | 'readonly' = 'auto';
   /** Dialog used by `ask` mode; set by the extension when Pi has a UI. */

@@ -37,7 +37,12 @@ export function headlessPermission(policy: HeadlessPermissionPolicy): Answer {
   };
 }
 
-/** Use the dialog when Pi has a UI; otherwise the headless policy. */
-export function permissionAnswer(hasUI: boolean, dialog: Answer, policy: HeadlessPermissionPolicy): Answer {
-  return hasUI ? dialog : headlessPermission(policy);
+/**
+ * Dialog when Pi has a UI, otherwise the headless policy.
+ * `/grok perms yolo` selects allow once and does not open a dialog. The mode is read per request.
+ */
+export function permissionAnswer(hasUI: boolean, dialog: Answer, policy: HeadlessPermissionPolicy, mode: () => 'yolo' | 'auto' | 'ask' | 'readonly' = () => 'auto'): Answer {
+  const base = hasUI ? dialog : headlessPermission(policy);
+  const allow = headlessPermission('allow');
+  return (request) => (mode() === 'yolo' ? allow(request) : base(request));
 }

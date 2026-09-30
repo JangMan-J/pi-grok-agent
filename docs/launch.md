@@ -12,7 +12,7 @@ This file holds the capability ledger, launch gates, channel drafts, schedule, r
 - Pi repository: the installed Pi 0.87.1 `package.json` names `github.com/earendil-works/pi` (the research digests cite `pi0/pi-mono` and `badlogic/pi-mono`, which are wrong).
 - Install path: npm, one command: `pi install npm:pi-grok-agent`. The first Grok turn starts the bundled gateway. `npm install -g pi-grok-agent` with `pi-grok-gateway` is for users who run the gateway themselves. The clone and `pi install git:` remain alternatives. All three pass in a clean `HOME` ([launch-verification.md](launch-verification.md#install-paths-and-first-run-2026-09-28)); the npm path was checked against a local registry and needs the owner's publication.
 - Pi compatibility: tested with Pi 0.87.1 only. Other Pi versions are untested. Node.js 22.19 is Pi's minimum. This package is tested only on Node.js 26.10.0. Do not write "Pi 0.87+".
-- GitHub About, applied 2026-09-28: the description and topics from [docs/github-presentation.md](github-presentation.md) are live, and [docs/assets/social-preview.png](assets/social-preview.png) is the social preview (the served image matched the committed PNG by SHA-256). Details in section 5.1.
+- GitHub About, applied 2026-09-28: the description and topics from [docs/github-presentation.md](github-presentation.md) are live, and [docs/assets/old/social-preview.png](assets/old/social-preview.png) was the social preview (the served image matched the committed PNG by SHA-256). Its replacement, [docs/assets/social-1280x640.png](assets/social-1280x640.png), was uploaded and verified the same way on 2026-09-30. Details in section 5.1.
 
 Positioning, without "first" or "only" claims: Grok Build already offers ACP (`grok agent serve` and a stdio mode), so other ACP clients can drive it. This project makes Grok Build a Pi model provider. Grok keeps its own harness, tools, and history. Pi supplies the transcript, gates, lent tools, and dialogs. Use real captures, not mockups.
 
@@ -35,9 +35,9 @@ Tracked tests versus current baseline: the tracked suite is 33 test cases in fiv
 | Hashline edits (`hashline_read`, `hashline_edit`, `hashline_grep`) | Conditional | Only when `~/.grok/config.toml` sets `[toolset] file_toolset = "hashline"`. Otherwise Grok uses `read_file` and `search_replace`. |
 | Full tool results | Qualified | Grok's model context keeps full results. Pi adds only `additionalContext` in `post_tool_use`. Pi's copies are shortened: 400 characters in the thinking stream, 8000 in the `grok-tool` entry, 600 in the expanded renderer. Lent Pi tool results pass to Grok whole. |
 | Pi tools lent to Grok over HTTP MCP through the gateway | Unit. Live 2026-09-28 (`model-probe`, `mcp-gate-probe`). | `handleMcpHttp` in `scripts/server.ts`, `test/model.test.ts`, `scripts/model-probe.ts` |
-| Grok permission prompts as Pi dialogs, headless policy | Source | `src/model/permissions.ts`, `headlessPermissions` in `src/config.ts` |
+| Grok permission prompts as Pi dialogs, headless policy, and `/grok perms yolo` selecting allow once | Unit | `src/model/permissions.ts`, `test/permissions.test.ts`, `headlessPermissions` in `src/config.ts` |
 | Pi gates Grok tools (`pre_tool_use`), post-edit check, stop check | Unit. Live 2026-09-28 (`hooks-live` 3/3, `hooks-probe`). | `test/hooks.test.ts`, `scripts/hooks-live.sh` |
-| `/grok perms yolo, auto, ask, read-only` | Unit | `test/hooks.test.ts` "/grok perms" tests |
+| `/grok perms yolo, auto, ask, read-only` | Unit | `test/hooks.test.ts` "/grok perms" tests; `test/permissions.test.ts` for allow once on `session/request_permission` |
 | Gateway guard tiers when Pi is slow or gone | Unit (validation) and wire test with a fake Grok binary. Live 2026-09-28 (`gateway-guard-probe`: hung, gone, dialog). | `test/guard.test.ts`; `test/gateway.test.ts` covers ack, policy, dialog, and disconnect tiers, one answer per request, and `ask` mode's dialog deadline; `scripts/gateway-guard-probe.ts` |
 | Gateway startup does not stop another gateway's leader | Wire test with a fake Grok binary | `test/gateway.test.ts` "a launch that loses its port": the port is bound before a leader is started or adopted |
 | `ask_user_question` as Pi dialogs | Unit. Live 2026-09-28 (`question-probe`). | `test/questions.test.ts` |
@@ -66,9 +66,9 @@ Facts for the README and every post:
 
 Three separate permission layers. Do not merge them in copy:
 
-- `/grok perms` is Pi's gate on Grok's native tools at `pre_tool_use`. `auto` mirrors Pi's tool set. `ask` adds a Pi dialog for each write or shell call. `read-only` denies writes and shell. `yolo` drops the mirror and the dialogs (`permissionMode` in `src/model/session.ts`).
+- `/grok perms` is Pi's gate on Grok's native tools at `pre_tool_use`. `auto` mirrors Pi's tool set. `ask` adds a Pi dialog for each write or shell call. `read-only` denies writes and shell. `yolo` treats the session as having read, edit, write, and bash, skips Pi's confirm dialog, and answers `session/request_permission` with allow once (`permissionMode` in `src/model/session.ts`, `permissionAnswer` in `src/model/permissions.ts`).
 - Deny and allow overrides (`denyGrokTools`, `allowGrokTools`, `PI_GROK_DENY_TOOLS`) are checked first in `capabilityGate` (`src/model/hooks.ts`). An explicit deny wins over an allow entry, and both win over the mirror.
-- Grok's own permission prompts are a different path. `grokMode` (`default`, `auto`, `yolo`) sets Grok's session mode (`yoloMode` and `autoMode` in `_meta`, `src/model/connection.ts`). `auto` and `yolo` remove Grok's confirmation prompts and are opt-in. With a UI, Pi shows the prompts as dialogs. Headless Pi uses `headlessPermissions`: the default `dialog` rejects, and `deny`, `reads`, `allow` are the other choices (`src/config.ts`).
+- Grok's own permission prompts are a different path. `grokMode` (`default`, `auto`, `yolo`) sets Grok's session mode (`yoloMode` and `autoMode` in `_meta`, `src/model/connection.ts`). `auto` and `yolo` remove Grok's confirmation prompts and are opt-in. With a UI, Pi shows the prompts that still arrive as dialogs, unless `/grok perms` is `yolo`, which selects allow once. Headless Pi uses `headlessPermissions`: the default `dialog` rejects, and `deny`, `reads`, `allow` are the other choices (`src/config.ts`). `yolo` selects allow once in headless Pi too.
 
 Hook failures fail open, as Grok's own hooks do. The gateway guard answers fail-closed when Pi does not acknowledge in time. A Grok turn that outlives its Pi session (`/new` or shutdown while Grok is still running) gets `deny` on every `pre_tool_use`, because Pi's gate no longer applies to it (`_x.ai/hooks/run` fallback in `src/model/connection.ts`, `test/gateway.test.ts`).
 
@@ -118,10 +118,19 @@ Live topics:
 
 ```text
 acp
+acp-client
 agent-client-protocol
+agentic-coding
+ai-agent
+ai-coding-assistant
 coding-agent
+coding-assistant
 grok
+grok-4
 grok-build
+llm
+mcp
+model-context-protocol
 model-provider
 pi-coding-agent
 pi-extension
@@ -130,12 +139,14 @@ typescript
 xai
 ```
 
+The first 11 were applied on 2026-09-28. `acp-client`, `agentic-coding`, `ai-agent`, `ai-coding-assistant`, `coding-assistant`, `grok-4`, `llm`, `mcp`, and `model-context-protocol` were added on 2026-09-30, which reaches GitHub's limit of 20.
 These are the owner-approved GitHub topics, not a copy of the package keywords. The live set includes `typescript`, not `pi`.
 GitHub repository search checks the name, description, and topics by default, not README text.
 
-Social image: [social-preview.png](assets/social-preview.png), 1280 × 640 pixels and 82,498 bytes.
-The image was uploaded through GitHub Settings. The public page's `og:image` points to that upload.
+Social image, uploaded 2026-09-28: [old/social-preview.png](assets/old/social-preview.png), 1280 × 640 pixels and 82,498 bytes.
+The image was uploaded through GitHub Settings. The public page's `og:image` pointed to that upload.
 The public image returned HTTP 200 and matched the local PNG byte for byte.
+Replacement: [social-1280x640.png](assets/social-1280x640.png), 1280 × 640 pixels and 563,006 bytes. Uploaded through GitHub Settings on 2026-09-30. The public page's `og:image` points to that upload, which returned HTTP 200 and matched the local PNG byte for byte.
 
 These settings are live. Repository file changes and launch announcements need separate owner authorization.
 

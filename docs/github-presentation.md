@@ -71,42 +71,42 @@ gh repo view JangMan-J/pi-grok-agent \
 
 The command adds topics. It does not remove topics that someone adds before publication.
 
-## Social preview
-
-Prepared image: [social-preview.png](assets/social-preview.png).
-Editable source: [social-preview.svg](assets/social-preview.svg).
-
-The card describes the integration. It is not a screenshot, benchmark, or proof of a successful Grok turn.
-It labels the model command "After setup" and states the Grok CLI login requirement.
-
-Regenerate from the repository root with ImageMagick:
+Added on 2026-09-30 with owner authorization, for 20 topics, GitHub's limit:
 
 ```sh
-magick -background none docs/assets/social-preview.svg \
-  -strip docs/assets/social-preview.png
-magick identify docs/assets/social-preview.png
+gh repo edit JangMan-J/pi-grok-agent \
+  --add-topic ai-agent,llm,mcp,model-context-protocol,grok-4,agentic-coding,ai-coding-assistant,coding-assistant,acp-client
 ```
 
-The PNG must be 1280 × 640 pixels and less than 1 MB.
-The PNG was uploaded through GitHub's repository Settings → Social preview on 2026-09-28.
-A committed image alone does not change the repository's social preview.
+`gh repo view` then listed all 20 topics.
 
-Verification: the public page's `og:image` points to the [uploaded card](https://repository-images.githubusercontent.com/1391981340/1395028c-5424-45b1-9dbc-f28254afdd16).
-The public image returned HTTP 200 and matched the local PNG byte for byte.
-The GitHub API confirmed the exact description and all 11 topics.
+## Social preview
+
+Current card: [social-1280x640.png](assets/social-1280x640.png), 1280 × 640 pixels and 563,006 bytes.
+It shows the project mark, the name, and the short line. It is not a screenshot, benchmark, or proof of a successful Grok turn.
+The README header uses [compact-1536x384.png](assets/compact-1536x384.png) at a display width of 768 pixels. [wide-1536x512.png](assets/wide-1536x512.png) is the taller alternative.
+All three are exports of [master-1774x887.png](assets/master-1774x887.png). [asset-checks.json](assets/asset-checks.json) records their sizes and SHA-256 values.
+
+The PNG must be 1280 × 640 pixels and less than 1 MB.
+Upload it through GitHub's repository Settings → Social preview. A committed image alone does not change the repository's social preview.
+Uploaded through Settings on 2026-09-30. The public page's `og:image` points to the [uploaded card](https://repository-images.githubusercontent.com/1391981340/c595f9ec-e378-4461-913b-04d50e213e9f), which returned HTTP 200 and matched this PNG byte for byte.
 
 SHA-256:
 
 ```text
-4d578113c30568f5d34f194b2e673d32f8f35aa7c9ff142fe1f26f33c1cce56f
+d0bc4a209d1cf38d4172b800b80b6af01bfcad51d090de65fcd01b3660950f1f
 ```
+
+Previous card: [old/social-preview.png](assets/old/social-preview.png), from [old/social-preview.svg](assets/old/social-preview.svg).
+It was uploaded on 2026-09-28. The public page's `og:image` pointed to the [uploaded card](https://repository-images.githubusercontent.com/1391981340/1395028c-5424-45b1-9dbc-f28254afdd16), which returned HTTP 200 and matched that PNG byte for byte (SHA-256 `4d578113c30568f5d34f194b2e673d32f8f35aa7c9ff142fe1f26f33c1cce56f`).
+The GitHub API confirmed the exact description and all 11 topics.
 
 ## Human and agent paths
 
 | Reader | Entry point | Next action |
 | --- | --- | --- |
-| Developer who wants to try it | [README](../README.md#quick-start) | Start the gateway, load Pi, complete the first-result prompt. |
-| Agent evaluating the integration | [README: For coding agents](../README.md#for-coding-agents) | Read requirements, limits, and headless permission behavior before setup. |
+| Developer who wants to try it | [README](../README.md) | Run `pi install npm:pi-grok-agent`, then pick a `grok/` model in `/models`. The first Grok turn starts the gateway. |
+| Agent evaluating the integration | [README: Safety](../README.md#safety) and [Notes](../README.md#notes) | Read requirements, limits, and headless permission behavior before setup. |
 | Contributor or coding agent | [AGENTS.md](../AGENTS.md) | Follow the source map and run the declared checks. |
 | User with a failed setup | [First-run issue form](../.github/ISSUE_TEMPLATE/first-run.yml) | Report versions, the last successful step, and a redacted reproduction. |
 
@@ -120,7 +120,7 @@ Agent discovery benefits from clear task descriptions and accessible evidence, n
 2. Close the runtime gates in [launch.md](launch.md) before announcing availability.
 3. Publish the README, issue form, and assets in the same revision.
 4. Check the About text and topics. Applied and verified on 2026-09-28.
-5. Check the social preview. Uploaded and verified on 2026-09-28.
+5. Check the social preview. The current card was uploaded and verified on 2026-09-30, the previous one on 2026-09-28.
 6. Inspect the published README on GitHub in light and dark themes, and at a narrow width.
 7. Open the first-run issue form without submitting it.
 8. Check third-party link previews after their caches refresh. GitHub's `og:image` is already verified.
