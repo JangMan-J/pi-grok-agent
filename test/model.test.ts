@@ -200,7 +200,10 @@ test('/grok command timeout cancels on Grok and frees the session for the next t
   const command = session.runCommand('/goal status', 30);
   await new Promise<void>((r) => { const i = setInterval(() => { if (fake.calls.some((c) => c.method === 'session/prompt')) { clearInterval(i); r(); } }, 5); });
   fake.handlers().onUpdate({ sessionId: 'g1', update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'thinking about it' } } } as any);
-  await assert.rejects(command, /timed out after 0\.03s/);
+  // runCommand's timer is unref'd so a pending command never holds Pi open. Node 22's test runner cancels a test
+  // once nothing keeps the event loop alive, so hold it open until the timeout fires.
+  const keepAlive = setInterval(() => {}, 1000);
+  try { await assert.rejects(command, /timed out after 0\.03s/); } finally { clearInterval(keepAlive); }
   assert.equal(session.promptActive, false, 'the session is free');
   assert.ok(fake.calls.some((c) => c.method === 'session/cancel'), 'the command prompt was cancelled on Grok');
 
