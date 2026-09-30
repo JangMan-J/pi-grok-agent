@@ -32,12 +32,12 @@ Run [Grok Build](https://docs.x.ai/build/overview) as an additional model provid
 └─────────────────────┘         └──────────────────┘         └─────────────────────┘
 ```
 
-Pi drives the session using the [Agent Client Protocol](https://agentclientprotocol.com) over WebSockets. Grok streams back its responses, thinking blocks, and the images and videos it generates. Grok runs its own tools, but asks Pi through a hook before each call, and Pi can allow or deny it. Pi's extension tools are lent to Grok over an MCP loopback. The first Grok turn auto-starts the local gateway (`127.0.0.1:2419` by default); every Pi process on the machine attaches to it. Details: [docs/architecture-diagram.md](https://github.com/JangMan-J/pi-grok-agent/blob/main/docs/architecture-diagram.md) · [docs/usage.md](https://github.com/JangMan-J/pi-grok-agent/blob/main/docs/usage.md).
+Pi drives the session using the [Agent Client Protocol](https://agentclientprotocol.com) over WebSockets. Grok streams back its responses, thinking blocks, as well as any images and videos it generates. Grok runs its own tools, but asks Pi through a hook before each call, and Pi can allow or deny it. Pi's extension tools are lent to Grok over an MCP loopback. The first Grok turn auto-starts the local gateway (`127.0.0.1:2419` by default); every Pi process on the machine attaches to it. Details: [docs/architecture-diagram.md](https://github.com/JangMan-J/pi-grok-agent/blob/main/docs/architecture-diagram.md) · [docs/usage.md](https://github.com/JangMan-J/pi-grok-agent/blob/main/docs/usage.md).
 
 ## Function
 
 - Pi sets permissions and boundaries. Read-only, ask, auto, and YOLO permission modes are supported.
-- Pi makes the decisions. Pi allows or denies each of Grok's tool calls, and Grok's permission prompts and `ask_user_question` prompts open as Pi dialogs.
+- Pi makes the decisions. Pi allows or denies each of Grok's tool calls. In interactive Pi, Grok's permission prompts and `ask_user_question` prompts open as Pi dialogs.
 - Grok can use Pi's extension tools. They are lent over MCP as `pi__<name>`, and the result continues the same Grok turn.
 - Grok keeps all of its tools and extensions. My own observations have been that Grok performs better with its native toolset, so this project's purpose is to keep its tools without buying the shed.
 
@@ -45,10 +45,10 @@ Pi drives the session using the [Agent Client Protocol](https://agentclientproto
 
 | Model ID | Name in `/models` | Reasoning efforts | Context window |
 | --- | --- | --- | --- |
-| `grok/grok-4.7` | Grok 4.7 | low, medium, high, xhigh | 500,000 tokens |
-| `grok/grok-4.7-build-fast` | Grok 4.7 Build Fast | low, medium, high, xhigh | 500,000 tokens |
-| `grok/grok-4.6` | Grok 4.6 | low, medium, high, xhigh | 500,000 tokens |
-| `grok/grok-4.5` | Grok 4.5 | low, medium, high | 500,000 tokens |
+| `grok/grok-4.7` | Grok 4.7 | low, medium, high, xhigh | 256,000 tokens |
+| `grok/grok-4.7-build-fast` | Grok 4.7 Build Fast | low, medium, high, xhigh | 256,000 tokens |
+| `grok/grok-4.6` | Grok 4.6 | low, medium, high, xhigh | 256,000 tokens |
+| `grok/grok-4.5` | Grok 4.5 | low, medium, high | 256,000 tokens |
 
 Model availability in Pi is determined by your [account access](https://grok.com).
 
@@ -60,7 +60,7 @@ Model availability in Pi is determined by your [account access](https://grok.com
 ## Notes
 
 - Not compatible with API key access. A Grok account is required, any membership tier. If your login expires, run `/login` in Grok Build or `/grok login` in Pi to renew it.
-- Token read, token write, cache read and cache hit % displayed in Pi are taken from Grok Build. Pi may occasionally report inaccurate data during long multistep tool calls, but will correct on the next turn.
+- The input, output, cache read, and cache write token counts and the cost shown in Pi come from Grok Build's usage report. Pi may occasionally report inaccurate data during long multistep tool calls, but will correct on the next turn.
 
 ## Documentation
 
