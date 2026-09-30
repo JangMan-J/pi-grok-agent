@@ -1,0 +1,31 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # 22: minimum in package.json engines. 26: used by the live checks.
+        node: [22, 24, 26]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: ${{ matrix.node }}
+      # package-lock.json is not tracked, so install from package.json.
+      - run: npm install
+      - run: npm run check
+      # Unit tests, plus the gateway test against a fake Grok binary.
+      # Nothing contacts Grok.
+      - run: npm test
+        env:
+          PI_GROK_AUTOSTART: '0'
