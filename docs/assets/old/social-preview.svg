@@ -1,0 +1,26 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="640" viewBox="0 0 1280 640" role="img" aria-labelledby="title desc">
+  <title id="title">pi-grok-agent — Grok's agent. Pi's workflow.</title>
+  <desc id="desc">Grok Build as a model in the Pi coding agent. Pi connects to Grok Build through a local ACP gateway. After setup, select it with pi --model grok/grok-4.7. Apache-2.0.</desc>
+  <rect width="1280" height="640" fill="#111716"/>
+  <path d="M64 0v640M1216 0v640" stroke="#26332d"/>
+  <rect x="64" y="59" width="7" height="24" rx="2" fill="#b9ef8b"/>
+  <text x="89" y="80" font-family="DejaVu Sans Mono, monospace" font-size="24" fill="#d6e5d7">pi-grok-agent</text>
+  <text x="1216" y="78" text-anchor="end" font-family="DejaVu Sans, sans-serif" font-size="17" letter-spacing="2" fill="#a7b8ab">PI MODEL PROVIDER</text>
+  <text x="64" y="176" font-family="DejaVu Sans, sans-serif" font-size="64" font-weight="bold" letter-spacing="-2" fill="#f5f6ed">Grok's agent.</text>
+  <text x="64" y="252" font-family="DejaVu Sans, sans-serif" font-size="64" font-weight="bold" letter-spacing="-2" fill="#b9ef8b">Pi's workflow.</text>
+  <text x="67" y="299" font-family="DejaVu Sans, sans-serif" font-size="25" fill="#b9c6bc">Grok Build's native tools, inside the Pi coding agent.</text>
+  <rect x="64" y="345" width="328" height="104" rx="12" fill="#1c2722" stroke="#3d5043"/>
+  <text x="88" y="384" font-family="DejaVu Sans, sans-serif" font-size="25" font-weight="bold" fill="#f5f6ed">Pi</text>
+  <text x="88" y="418" font-family="DejaVu Sans, sans-serif" font-size="18" fill="#b9c6bc">Transcript · dialogs · tool gates</text>
+  <path d="M417 397h111m-6-6 6 6-6 6m-99-12-6 6 6 6M752 397h111m-6-6 6 6-6 6m-99-12-6 6 6 6" fill="none" stroke="#b9ef8b" stroke-width="2"/>
+  <text x="640" y="390" text-anchor="middle" font-family="DejaVu Sans Mono, monospace" font-size="20" fill="#d6e5d7">Local ACP</text>
+  <text x="640" y="418" text-anchor="middle" font-family="DejaVu Sans Mono, monospace" font-size="20" fill="#d6e5d7">gateway</text>
+  <rect x="888" y="345" width="328" height="104" rx="12" fill="#1c2722" stroke="#3d5043"/>
+  <text x="912" y="384" font-family="DejaVu Sans, sans-serif" font-size="25" font-weight="bold" fill="#f5f6ed">Grok Build</text>
+  <text x="912" y="418" font-family="DejaVu Sans, sans-serif" font-size="18" fill="#b9c6bc">Native tools · agent history</text>
+  <path d="M64 488h1152" stroke="#34473a"/>
+  <text x="64" y="526" font-family="DejaVu Sans, sans-serif" font-size="13" letter-spacing="2" fill="#a7b8ab">AFTER SETUP</text>
+  <text x="64" y="566" font-family="DejaVu Sans Mono, monospace" font-size="28" fill="#f5f6ed" xml:space="preserve"><tspan fill="#b9ef8b">$ </tspan>pi --model grok/grok-4.7</text>
+  <text x="1216" y="527" text-anchor="end" font-family="DejaVu Sans, sans-serif" font-size="16" fill="#b9c6bc">Grok Build CLI + login required</text>
+  <text x="1216" y="565" text-anchor="end" font-family="DejaVu Sans Mono, monospace" font-size="16" fill="#b9ef8b">Apache-2.0</text>
+</svg>

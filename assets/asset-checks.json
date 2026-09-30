@@ -1,0 +1,32 @@
+{
+  "selected_master": "master-1774x887.png",
+  "master_matches_attachment_bytes": true,
+  "master_sha256": "3103dbd2904f147827809dcbf2df1a4115d8e5058899f44e4daf3494ecaf15c6",
+  "editing": "No color, shape, or text edits. Proportional resizing and blank vertical margin crops only.",
+  "exports": [
+    {
+      "file": "wide-1536x512.png",
+      "pixels": "1536x512",
+      "bytes": 546710,
+      "opaque": true,
+      "sha256": "c051e950339dc4cc41c6bf31b9526c764726289f5f63d89c797cff6062d46993",
+      "visual_review": "passed"
+    },
+    {
+      "file": "compact-1536x384.png",
+      "pixels": "1536x384",
+      "bytes": 434697,
+      "opaque": true,
+      "sha256": "ad7728d85059999a28dd462ea480dba274f3c64d06cc2af14adbb4fdf5a91f70",
+      "visual_review": "passed"
+    },
+    {
+      "file": "social-1280x640.png",
+      "pixels": "1280x640",
+      "bytes": 563006,
+      "opaque": true,
+      "sha256": "d0bc4a209d1cf38d4172b800b80b6af01bfcad51d090de65fcd01b3660950f1f",
+      "visual_review": "passed"
+    }
+  ]
+}
