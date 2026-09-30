@@ -30,7 +30,7 @@ Tracked tests versus current baseline: the tracked suite is 33 test cases in fiv
 
 | Capability | Status | Evidence |
 | --- | --- | --- |
-| `grok/grok-4.7`, `grok-4.7-build-fast`, `grok-4.6`, `grok-4.5` as Pi models, 500k context | Source | `src/model.ts` `registerProvider`, `MODEL_IDS` in `src/model/provider.ts` |
+| `grok/grok-4.7`, `grok-4.7-build-fast`, `grok-4.6`, `grok-4.5` as Pi models, context window from Grok Build's model cache (256,000 when absent) | Source, Unit | `src/model.ts` `registerProvider` and `grokContextWindows`, `MODEL_IDS` in `src/model/provider.ts`, `test/extension.test.ts` "context windows come from Grok Build's model cache" |
 | Grok native tools run on Grok's harness. Pi shows them as thinking text and `grok-tool` entries and does not execute them. | Unit. Live 2026-09-28 (0 Pi tool executions, 5 Grok native). | `session.ts` `tool_call` case, `test/model.test.ts` "Grok native tool activity is observed, not executed", `scripts/model-live.sh` |
 | Hashline edits (`hashline_read`, `hashline_edit`, `hashline_grep`) | Conditional | Only when `~/.grok/config.toml` sets `[toolset] file_toolset = "hashline"`. Otherwise Grok uses `read_file` and `search_replace`. |
 | Full tool results | Qualified | Grok's model context keeps full results. Pi adds only `additionalContext` in `post_tool_use`. Pi's copies are shortened: 400 characters in the thinking stream, 8000 in the `grok-tool` entry, 600 in the expanded renderer. Lent Pi tool results pass to Grok whole. |

@@ -43,12 +43,14 @@ Pi drives the session using the [Agent Client Protocol](https://agentclientproto
 
 ## Models
 
-| Model ID | Name in `/models` | Reasoning efforts | Context window |
-| --- | --- | --- | --- |
-| `grok/grok-4.7` | Grok 4.7 | low, medium, high, xhigh | 256,000 tokens |
-| `grok/grok-4.7-build-fast` | Grok 4.7 Build Fast | low, medium, high, xhigh | 256,000 tokens |
-| `grok/grok-4.6` | Grok 4.6 | low, medium, high, xhigh | 256,000 tokens |
-| `grok/grok-4.5` | Grok 4.5 | low, medium, high | 256,000 tokens |
+| Model ID | Name in `/models` | Reasoning efforts |
+| --- | --- | --- |
+| `grok/grok-4.7` | Grok 4.7 | low, medium, high, xhigh |
+| `grok/grok-4.7-build-fast` | Grok 4.7 Build Fast | low, medium, high, xhigh |
+| `grok/grok-4.6` | Grok 4.6 | low, medium, high, xhigh |
+| `grok/grok-4.5` | Grok 4.5 | low, medium, high |
+
+Each model's context window is read from Grok Build's model cache (`~/.grok/models_cache.json`) when the extension loads.
 
 Model availability in Pi is determined by your [account access](https://grok.com).
 

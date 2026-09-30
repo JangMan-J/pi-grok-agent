@@ -69,7 +69,7 @@ A clone also auto-starts the gateway: it runs `scripts/server.ts` from the check
 
 Which of these a Grok account may use depends on the account. Grok reports the allowed models for each session; a free account on 2026-09-28 had only `grok-4.7`. Pi switches the Grok session to the model picked in `/models`. A model the account lacks fails the turn with the list of available models; before 0.1.1, Grok silently ran its default model instead.
 
-Each model has a 500,000-token context window and a 32,000-token output limit in Pi's metadata. Per-token cost is zero in the metadata. The turn cost comes from Grok's `turn_completed` report, converted at 1e9 ticks per US dollar. That ratio is inferred from Grok's rates. It is not documented by Grok.
+Each model's context window in Pi's metadata comes from Grok Build's model cache for the signed-in account (`~/.grok/models_cache.json`, `context_window`), read when the extension loads. ACP does not report it. Without the cache it is 256,000 tokens, the value Grok Build reported for every model on 2026-09-30. `/grok debug` shows the session's context use against the same number. The output limit in Pi's metadata is 32,000 tokens. Per-token cost is zero in the metadata. The turn cost comes from Grok's `turn_completed` report, converted at 1e9 ticks per US dollar. That ratio is inferred from Grok's rates. It is not documented by Grok.
 
 Pi controls work as usual:
 

@@ -4,7 +4,7 @@ import { Box, Container, Image, Spacer, Text, getCapabilities } from '@earendil-
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { homedir, tmpdir } from 'node:os';
 import { extname, join } from 'node:path';
 import { agentDir, readConfig } from './config.ts';
 import { grokLogin } from './login.ts';
@@ -18,6 +18,25 @@ import { createSteerHandler } from './model/steer.ts';
 type SavedModelSession = { owner: string; grokSessionId: string; serverId: string; cwd: string };
 const ENTRY = 'grok-model-session';
 const MODEL_NAMES: Record<string, string> = { 'grok-4.5': 'Grok 4.5', 'grok-4.6': 'Grok 4.6', 'grok-4.7': 'Grok 4.7', 'grok-4.7-build-fast': 'Grok 4.7 Build Fast' };
+/** Used when Grok Build's model cache has no context window for a model. Grok Build reported 256,000 for every model on 2026-09-30. */
+const DEFAULT_CONTEXT_WINDOW = 256_000;
+
+/**
+ * Context window per model id, as Grok Build reports it for the signed-in account in its model cache
+ * (`models.<id>.info.context_window`). ACP does not report it. A missing or unreadable cache gives an empty map.
+ */
+export function grokContextWindows(file = join(homedir(), '.grok', 'models_cache.json')): Record<string, number> {
+  try {
+    const models = (JSON.parse(readFileSync(file, 'utf8')) as { models?: Record<string, { info?: { context_window?: unknown } }> }).models ?? {};
+    return Object.fromEntries(Object.entries(models).flatMap(([id, model]) => {
+      const tokens = model?.info?.context_window;
+      return typeof tokens === 'number' && Number.isInteger(tokens) && tokens > 0 ? [[id, tokens]] : [];
+    }));
+  } catch {
+    return {};
+  }
+}
+
 const TOOL_ENTRY = 'grok-tool';
 const COMMAND_ENTRY = 'grok-command';
 /** Marker on the one custom *message* we send (media). pi-agent-core presents custom messages to the model as user
@@ -107,6 +126,9 @@ export default async function grokModel(pi: ExtensionAPI) {
 
   const stream = createGrokStream(connection, { current: () => current, piTools: config.piTools });
 
+  const contextWindows = grokContextWindows();
+  const contextWindowFor = (id: string | undefined) => (id && contextWindows[id]) || DEFAULT_CONTEXT_WINDOW;
+
   pi.registerProvider('grok', {
     baseUrl: config.url,
     apiKey: 'grok-build-login',
@@ -115,8 +137,8 @@ export default async function grokModel(pi: ExtensionAPI) {
       id, name: MODEL_NAMES[id] ?? id, reasoning: true, input: ['text', 'image'], // images spill to a temp file and go by path
       // Efforts as the agent advertises them per model: 4.5 has low|medium|high, the others add xhigh. Nothing below low; no max.
       thinkingLevelMap: { minimal: null, low: 'low', medium: 'medium', high: 'high', xhigh: id === 'grok-4.5' ? null : 'xhigh', max: null },
-      // Grok advertises totalContextTokens=500000 for these models. Cost per token is unknown; per-turn cost comes from Grok's usage report.
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, contextWindow: 500_000, maxTokens: 32_000,
+      // Context window from Grok Build's model cache. Cost per token is unknown; per-turn cost comes from Grok's usage report.
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, contextWindow: contextWindowFor(id), maxTokens: 32_000,
     })),
     streamSimple: (model, context, options) => {
       const before = current?.grokSessionId;
@@ -252,7 +274,7 @@ export default async function grokModel(pi: ExtensionAPI) {
               `gateway: ${config.url} (${connection.isOpen ? 'connected' : 'not connected'}${connection.launchedGateway ? `, started by this Pi as pid ${connection.launchedGateway}` : ''}${connection.lastDrop ? `, last drop: ${connection.lastDrop}` : ''}; auto-start ${config.autoStartGateway ? 'on' : 'off'})`,
               `grok session: ${session.grokSessionId ?? '(none yet; first message creates it)'}`,
               `mode: ${session.mode}${session.promptActive ? ' (turn running)' : ''}; pi perms: ${session.permissionMode}; grok mode: ${session.grokMode}`,
-              `grok context: ${session.lastContextTokens != null ? session.lastContextTokens.toLocaleString() + ' / 500,000' : 'unknown'}`,
+              `grok context: ${session.lastContextTokens != null ? `${session.lastContextTokens.toLocaleString()} / ${contextWindowFor(session.grokModel).toLocaleString()}` : 'unknown'}`,
               `usage: ${u.turns} turns, ${u.inputTokens.toLocaleString()} in (${u.cachedReadTokens.toLocaleString()} cached), ${u.outputTokens.toLocaleString()} out, $${u.costUsd.toFixed(3)}`,
               `lent Pi tools: ${session.tools.length ? session.tools.map((t) => t.name).join(', ') : 'none'}`,
               `hook decisions: ${session.hookLog.length} (${denied} denied); pending lent-tool calls: ${session.pendingToolCallIds.length}`,

@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
@@ -75,4 +75,23 @@ test('the extension loads without the gateway secret file; the secret is read at
   } as unknown as ExtensionAPI;
   await grokModel(pi); // Pi exits on any extension load error, so this must not throw
   assert.ok(provider, 'the grok provider is registered even though no secret exists yet');
+});
+
+test('context windows come from Grok Build\'s model cache; bad values and a missing cache are skipped', async (t) => {
+  const dir = await mkdtemp(join(tmpdir(), 'pi-grok-models-cache-'));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  const { grokContextWindows } = await import('../src/model.ts');
+  const file = join(dir, 'models_cache.json');
+  // Shape of ~/.grok/models_cache.json as Grok Build wrote it on 2026-09-30.
+  await writeFile(file, JSON.stringify({ models: {
+    'grok-4.7': { info: { id: 'grok-4.7', name: 'Grok 4.7', context_window: 256000, compaction_at_tokens: true } },
+    'grok-4.5': { info: { id: 'grok-4.5', context_window: 131072 } },
+    'grok-x': { info: { context_window: '256000' } },
+    'grok-y': { info: { context_window: -1 } },
+    'grok-z': {},
+  } }));
+  assert.deepEqual(grokContextWindows(file), { 'grok-4.7': 256000, 'grok-4.5': 131072 });
+  assert.deepEqual(grokContextWindows(join(dir, 'missing.json')), {});
+  await writeFile(file, 'not json');
+  assert.deepEqual(grokContextWindows(file), {});
 });
