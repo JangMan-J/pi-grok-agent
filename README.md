@@ -1,11 +1,11 @@
 <h1 align="center">
-  <img src="https://raw.githubusercontent.com/JangMan-J/pi-grok-agent/main/docs/assets/compact-1536x384.png" width="768" alt="pi-grok-agent — Grok's agent. Pi's workflow.">
+  <img src="https://raw.githubusercontent.com/JangMan-J/pi-grok-agent/main/docs/assets/compact-1536x384.png" width="768" alt="pi-grok-agent: Grok's agent. Pi's workflow.">
 </h1>
 
 <p align="center">
   <a href="https://github.com/JangMan-J/pi-grok-agent/actions/workflows/ci.yml"><img src="https://github.com/JangMan-J/pi-grok-agent/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
   <a href="https://www.npmjs.com/package/pi-grok-agent"><img src="https://img.shields.io/npm/v/pi-grok-agent" alt="npm version"></a>
-  <a href="LICENSE"><img src="https://img.shields.io/npm/l/pi-grok-agent" alt="License: Apache-2.0"></a>
+  <a href="https://github.com/JangMan-J/pi-grok-agent/blob/main/LICENSE"><img src="https://img.shields.io/npm/l/pi-grok-agent" alt="License: Apache-2.0"></a>
 </p>
 
 ```sh
@@ -32,14 +32,14 @@ Run [Grok Build](https://docs.x.ai/build/overview) as an additional model provid
 └─────────────────────┘         └──────────────────┘         └─────────────────────┘
 ```
 
-Pi drives the session using [Agent Client Protocol](https://agentclientprotocol.com) over WebSockets. Grok returns streaming responses, thinking blocks, as well as image and video requests. All of Grok's tool requests are routed back to Pi through callbacks over an MCP loopback. The first Grok turn auto-starts the local gateway (`127.0.0.1:2419` by default) ; every Pi process on the machine attaches to it. Details: [docs/architecture-diagram.md](docs/architecture-diagram.md) · [docs/usage.md](docs/usage.md).
+Pi drives the session using the [Agent Client Protocol](https://agentclientprotocol.com) over WebSockets. Grok streams back its responses, thinking blocks, and the images and videos it generates. Grok runs its own tools, but asks Pi through a hook before each call, and Pi can allow or deny it. Pi's extension tools are lent to Grok over an MCP loopback. The first Grok turn auto-starts the local gateway (`127.0.0.1:2419` by default); every Pi process on the machine attaches to it. Details: [docs/architecture-diagram.md](https://github.com/JangMan-J/pi-grok-agent/blob/main/docs/architecture-diagram.md) · [docs/usage.md](https://github.com/JangMan-J/pi-grok-agent/blob/main/docs/usage.md).
 
 ## Function
 
-- **Pi sets permissions and boundaries.** Read-only, ask, auto, and YOLO permission modes are supported. 
-- **Pi makes decisions.** Grok's tool call requests, turn order, user_ask_question prompts are delegated to Pi.
-- **Grok can use Pi's extension tools** Lent over MCP as `pi__<name>`, with the result continuing the same Grok turn.
-- **Grok keeps all of its tools and extensions.** My own observations have been that Grok performs better with its native toolset, so this project's purpose is to keep its tools without buying the shed.
+- Pi sets permissions and boundaries. Read-only, ask, auto, and YOLO permission modes are supported.
+- Pi makes the decisions. Pi allows or denies each of Grok's tool calls, and Grok's permission prompts and `ask_user_question` prompts open as Pi dialogs.
+- Grok can use Pi's extension tools. They are lent over MCP as `pi__<name>`, and the result continues the same Grok turn.
+- Grok keeps all of its tools and extensions. My own observations have been that Grok performs better with its native toolset, so this project's purpose is to keep its tools without buying the shed.
 
 ## Models
 
@@ -50,30 +50,29 @@ Pi drives the session using [Agent Client Protocol](https://agentclientprotocol.
 | `grok/grok-4.6` | Grok 4.6 | low, medium, high, xhigh | 500,000 tokens |
 | `grok/grok-4.5` | Grok 4.5 | low, medium, high | 500,000 tokens |
 
-
 Model availability in Pi is determined by your [account access](https://grok.com).
 
 ## Safety
 
-- This package connects the Grok Build agent over ACP, not the xAI chat-completions API. The ACP protocol does not provide complete visibility or control of an agent, and not all functions or extensions of Grok Build have been tested for safety in this configuration. The tool gates are not an operating-system sandbox: Grok runs with your user's permissions. 
-- The gateway listens on loopback only, requires a bearer secret, and never starts Grok with `--always-approve`. Headless use does not imply approval: by default, headless Pi cancels Grok's permission prompts. `/grok perms yolo` selects allow once for those prompts. The `postEditCheck` and `stopCheck` settings run as shell commands — treat them as executable code.
+- This package connects the Grok Build agent over ACP, not the xAI chat-completions API. ACP does not give complete visibility or control of an agent, and not all functions or extensions of Grok Build have been tested for safety in this configuration. The tool gates are not an operating-system sandbox: Grok runs with your user's permissions.
+- The gateway listens on loopback only, requires a bearer secret, and never starts Grok with `--always-approve`. Headless use does not imply approval: by default, headless Pi cancels Grok's permission prompts. `/grok perms yolo` selects allow once for those prompts. The `postEditCheck` and `stopCheck` settings run as shell commands, so treat them as executable code.
 
 ## Notes
 
-- Not compatible with API key access. A Grok account is required, any membership tier. If your OAuth token expires you can '/login' from either Grok Build or Pi with '/grok login' to renew credentials.
+- Not compatible with API key access. A Grok account is required, any membership tier. If your login expires, run `/login` in Grok Build or `/grok login` in Pi to renew it.
 - Token read, token write, cache read and cache hit % displayed in Pi are taken from Grok Build. Pi may occasionally report inaccurate data during long multistep tool calls, but will correct on the next turn.
 
 ## Documentation
 
-- [docs/usage.md](docs/usage.md) — settings, lent tools, permissions, the gateway guard, hooks, `/grok` commands, troubleshooting
-- [docs/architecture-diagram.md](docs/architecture-diagram.md) — the diagram in mermaid and ASCII
-- [docs/first-class-model.md](docs/first-class-model.md) — design and turn mapping
-- [docs/launch-verification.md](docs/launch-verification.md) — recorded live runs behind the verified claims
+- [docs/usage.md](https://github.com/JangMan-J/pi-grok-agent/blob/main/docs/usage.md): settings, lent tools, permissions, the gateway guard, hooks, `/grok` commands, troubleshooting
+- [docs/architecture-diagram.md](https://github.com/JangMan-J/pi-grok-agent/blob/main/docs/architecture-diagram.md): the diagram in mermaid and ASCII
+- [docs/first-class-model.md](https://github.com/JangMan-J/pi-grok-agent/blob/main/docs/first-class-model.md): design and turn mapping
+- [docs/launch-verification.md](https://github.com/JangMan-J/pi-grok-agent/blob/main/docs/launch-verification.md): recorded live runs behind the verified claims
 
 ## Feedback
 
-- [Open an issue](https://github.com/JangMan-J/pi-grok-agent/issues) with the output of `node --version`, `pi --version`, and `grok --version`, the model ID, and a short redacted excerpt of `/grok debug`.
+[Open an issue](https://github.com/JangMan-J/pi-grok-agent/issues) with the output of `node --version`, `pi --version`, and `grok --version`, the model ID, and a short redacted excerpt of `/grok debug`.
 
 ## License
 
-- [Apache License 2.0](LICENSE).
+[Apache License 2.0](https://github.com/JangMan-J/pi-grok-agent/blob/main/LICENSE)
