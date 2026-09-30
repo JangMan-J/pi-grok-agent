@@ -1,6 +1,6 @@
 {
   "name": "pi-grok-agent",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "license": "Apache-2.0",
   "type": "module",
   "description": "Pi model provider for Grok Build: Grok keeps its native harness and tools while Pi drives the session over a local WebSocket ACP gateway",
@@ -86,7 +86,9 @@
   "pi": {
     "extensions": [
       "./src/model.ts"
-    ]
+    ],
+    "image": "https://raw.githubusercontent.com/JangMan-J/pi-grok-agent/main/docs/assets/social-1280x640.png",
+    "video": "https://github.com/JangMan-J/pi-grok-agent/raw/refs/heads/main/evidence/pi-grok-agent-demo-finalv.mp4"
   },
   "scripts": {
     "test": "node --test test/*.test.ts",
