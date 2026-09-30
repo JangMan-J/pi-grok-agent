@@ -22,6 +22,8 @@ jobs:
         with:
           node-version: 26
           registry-url: https://registry.npmjs.org
+          # No dependency cache in a publishing job (cache poisoning).
+          package-manager-cache: false
       - name: Tag matches package.json version
         run: |
           want="v$(node -p 'require("./package.json").version')"
