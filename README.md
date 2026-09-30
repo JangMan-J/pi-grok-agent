@@ -2,6 +2,12 @@
   <img src="https://raw.githubusercontent.com/JangMan-J/pi-grok-agent/main/docs/assets/compact-1536x384.png" width="768" alt="pi-grok-agent — Grok's agent. Pi's workflow.">
 </h1>
 
+<p align="center">
+  <a href="https://github.com/JangMan-J/pi-grok-agent/actions/workflows/ci.yml"><img src="https://github.com/JangMan-J/pi-grok-agent/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <a href="https://www.npmjs.com/package/pi-grok-agent"><img src="https://img.shields.io/npm/v/pi-grok-agent" alt="npm version"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/npm/l/pi-grok-agent" alt="License: Apache-2.0"></a>
+</p>
+
 ```sh
 pi install npm:pi-grok-agent
 ```
