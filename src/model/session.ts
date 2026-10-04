@@ -72,9 +72,9 @@ export class GrokModelSession {
   readonly piSessionId: string;
   readonly cwd: string;
   /** Grok's native permission prompts (file edits, shell) go here; default denies. */
-  permission: (request: RequestPermissionRequest, extend?: () => void) => Promise<RequestPermissionResponse> = async () => ({ outcome: { outcome: 'cancelled' } });
+  permission: (request: RequestPermissionRequest, extend?: () => void, signal?: AbortSignal) => Promise<RequestPermissionResponse> = async () => ({ outcome: { outcome: 'cancelled' } });
   /** Grok's ask_user_question; default cancelled (the model is told the user did not answer). */
-  ask: (request: any, extend?: () => void) => Promise<Record<string, unknown>> = async () => ({ outcome: 'cancelled' });
+  ask: (request: any, extend?: () => void, signal?: AbortSignal) => Promise<Record<string, unknown>> = async () => ({ outcome: 'cancelled' });
   /** Pi tool names present in the Pi session; the pre_tool_use gate mirrors them onto Grok's harness. */
   piToolNames: string[] = [];
   /** Runtime source/namespace metadata for Pi tools, when Pi exposes it before transcript serialization. */
@@ -93,7 +93,7 @@ export class GrokModelSession {
    */
   permissionMode: PiPermissionMode = 'auto';
   /** Dialog used by `ask` mode; set by the extension when Pi has a UI. */
-  askDialog?: (tool: string, input: unknown) => Promise<boolean>;
+  askDialog?: (tool: string, input: unknown, signal?: AbortSignal) => Promise<boolean>;
   /** Directory for project copies of Grok media (relative to cwd, or absolute). Empty disables copying. */
   mediaDir = '.pi/grok-images';
   /** Hook decisions this session made, for evidence and tests. */
@@ -170,7 +170,7 @@ export class GrokModelSession {
     const attached = await this.connection.attachSession({
       sessionId: this.grokSessionId, cwd: this.cwd, serverId: this.serverId, serverName: PI_MCP_SERVER_NAME, rules,
       offerPiTools: this.tools.length > 0, grokMode: this.grokMode,
-      handlers: { onUpdate: (n) => this.onUpdate(n), onMcp: (m) => this.onMcp(m), onPermission: (r, extend) => this.permission(r, extend), onHookRun: (p, gate) => this.onHookRun(p, gate), onHookEvent: (p) => { void this.onHookRun(p); }, onQuestion: (q, extend) => this.ask(q, extend), onSessionExt: (u) => this.onSessionExt(u) },
+      handlers: { onUpdate: (n) => this.onUpdate(n), onMcp: (m) => this.onMcp(m), onPermission: (r, extend, signal) => this.permission(r, extend, signal), onHookRun: (p, gate) => this.onHookRun(p, gate), onHookEvent: (p) => { void this.onHookRun(p); }, onQuestion: (q, extend, signal) => this.ask(q, extend, signal), onSessionExt: (u) => this.onSessionExt(u), onNotice: (message) => { if (this.promptActive) this.emit({ kind: 'thought', delta: `${message}\n` }); } },
     });
     const { sessionId, response } = attached;
     if (attached.replacedSessionId) {
@@ -408,7 +408,7 @@ export class GrokModelSession {
   }
 
   /** Blocking client hooks: gate native tools by Pi capability, annotate edits, and hold the stop. */
-  async onHookRun(payload: HookRun, gate?: { dialog(): void }): Promise<HookReply> {
+  async onHookRun(payload: HookRun, gate?: { dialog(): void; signal?: AbortSignal }): Promise<HookReply> {
     if (!payload || typeof payload !== 'object' || typeof payload.hookEventName !== 'string' || !payload.hookEventName) {
       const reason = 'Malformed hook payload: missing hookEventName.';
       this.logHook({ event: 'malformed', decision: 'deny', reason });
@@ -427,8 +427,8 @@ export class GrokModelSession {
           const needsDialog = this.permissionMode === 'ask' && kind !== 'read' && kind !== 'other';
           if (verdict.allow && needsDialog && this.askDialog) {
             gate?.dialog(); // a human is deciding: extend the leash's request deadline
-            const ok = await this.askDialog(tool, payload.toolInput);
-            if (!ok) verdict = { allow: false, reason: `The user declined ${tool}.` };
+            const ok = await this.askDialog(tool, payload.toolInput, gate?.signal);
+            if (!ok) verdict = { allow: false, reason: gate?.signal?.aborted ? 'Pi dialog cancelled before an answer.' : `The user declined ${tool}.` };
           }
           const reply: HookReply = verdict.allow ? { decision: 'continue' } : { decision: 'deny', reason: verdict.reason };
           this.toolCallsSeen++;

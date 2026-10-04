@@ -124,31 +124,85 @@ test('stall ends the provider turn with the exact notification message; next tur
   await next;
 });
 
-test('deadline denies once, ends the provider turn, and drops before a late handler answer can reach Grok', async (t) => {
-  const s = setup(t, { requestMs: 200 }, { FAKE_GROK_HOLD_PROMPT: '1' });
+test('deadline is one notice; the same child finishes normally and a noncooperating handler cannot reply late', async (t) => {
+  const s = setup(t, { requestMs: 200 }, { FAKE_GROK_HOLD_PROMPT: '1', FAKE_GROK_FINISH_ON_DENY: '1' });
   let answer!: (reply: any) => void;
-  s.session.onHookRun = () => new Promise((resolve) => { answer = resolve; });
+  let signal: AbortSignal | undefined;
+  s.session.onHookRun = (_payload, gate) => { signal = gate?.signal; return new Promise((resolve) => { answer = resolve; }); };
   const running = turn(s.connection, s.session);
-  await until(() => s.session.promptActive, 'running prompt');
+  await until(() => rows(s.grokLog).some((r) => r.id === 'session/prompt'), 'running prompt');
+  const pid = s.connection.pid, generation = s.connection.generation;
   await s.connection.agent.notify('test/emit', hook(s.session, 'slow-hook'));
   const events = await running;
   const deadline = rows(s.log).find((r) => r.params?.event === 'deadline').params;
-  assert.equal(events.at(-1).error.errorMessage, `[pi-grok-leash denied _x.ai/hooks/run slow-hook after ${deadline.ms} ms: Pi did not answer]`);
-  assert.equal(s.connection.isOpen, false);
-  await s.connection.close();
+  assert.deepEqual(events.filter((e) => e.type === 'thinking_delta').map((e) => e.delta), [`[pi-grok-leash denied _x.ai/hooks/run slow-hook after ${deadline.ms} ms: Pi did not answer]\n`]);
+  assert.equal(events.at(-1).type, 'done');
+  assert.equal(events.at(-1).reason, 'stop');
+  assert.equal(events.filter((e) => e.type === 'text_delta').map((e) => e.delta).join(''), 'continued after denial');
+  assert.equal(signal?.aborted, true);
+  assert.equal(s.connection.isOpen, true);
   answer({ decision: 'continue' });
   await sleep(30);
   const replies = rows(s.grokLog).filter((r) => r.id === 'slow-hook');
-  assert.equal(replies.length, 1);
-  assert.deepEqual(replies[0].result, { decision: 'deny', reason: `pi-grok-leash: no answer in ${deadline.ms} ms` });
-  // Immediate drop closes stdin, so this late answer cannot produce a leash late-reply event.
-  assert.equal(rows(s.log).filter((r) => r.params?.event === 'deadline').length, 1);
+  assert.deepEqual(replies.map((r) => r.result), [{ decision: 'deny', reason: `pi-grok-leash: no answer in ${deadline.ms} ms` }]);
+  assert.equal(rows(s.log).some((r) => r.params?.event === 'late-reply'), false);
+  await s.session.attach(undefined);
+  assert.equal(s.connection.pid, pid);
+  assert.equal(s.connection.generation, generation);
+  assert.equal(rows(s.grokLog).filter((r) => r.id === 'spawn').length, 1);
+  assert.equal(rows(s.grokLog).filter((r) => r.id === 'session/load').length, 0);
+});
+
+test('deadline aborts hook confirm, permission select, and question select/input dialogs', async (t) => {
+  for (const kind of ['hook', 'permission', 'question-select', 'question-input']) await t.test(kind, async (t) => {
+    const s = setup(t, { requestMs: 200, dialogMs: 250 }, { FAKE_GROK_HOLD_PROMPT: '1', FAKE_GROK_FINISH_ON_DENY: '1' });
+    let closed = 0;
+    const dialog = (_title: string, _options: unknown, opts: { signal?: AbortSignal }) => new Promise<undefined>((resolve) => {
+      assert.ok(opts.signal);
+      opts.signal.addEventListener('abort', () => { closed++; resolve(undefined); }, { once: true });
+    });
+    const ctx = { hasUI: true, ui: { select: kind === 'question-input' ? async () => 'Other' : dialog, input: dialog } } as any;
+    s.session.hookSettings = { allowGrokTools: ['hashline_edit'] };
+    s.session.permissionMode = 'ask';
+    s.session.askDialog = async (tool, input, signal) => { await dialog(tool, input, { signal }); return false; };
+    s.session.permission = permissionAnswer(true, permissionDialog(ctx), 'dialog');
+    s.session.ask = questionAnswerer(ctx);
+    const running = turn(s.connection, s.session);
+    await until(() => rows(s.grokLog).some((r) => r.id === 'session/prompt'), 'prompt');
+    const pid = s.connection.pid, generation = s.connection.generation;
+    const request = kind === 'hook' ? hook(s.session, kind) : kind === 'permission'
+      ? { jsonrpc: '2.0', id: kind, method: 'session/request_permission', params: { sessionId: s.session.grokSessionId, toolCall: { toolCallId: 't', title: 'write' }, options: [{ kind: 'allow_once', optionId: 'yes', name: 'Allow' }] } }
+      : { jsonrpc: '2.0', id: kind, method: '_x.ai/ask_user_question', params: { sessionId: s.session.grokSessionId, questions: [{ question: 'Pick', options: [{ label: 'A', description: '' }] }], mode: 'default' } };
+    await s.connection.agent.notify('test/emit', request);
+    const events = await running;
+    assert.equal(closed, 1, 'the displayed dialog was dismissed by its abort signal');
+    assert.equal(events.at(-1).type, 'done');
+    assert.equal(events.filter((e) => e.type === 'thinking_delta').length, 1);
+    assert.equal(rows(s.grokLog).filter((r) => r.id === kind).length, 1, 'only the leash synthetic reply');
+    assert.equal(rows(s.log).some((r) => r.params?.event === 'late-reply'), false);
+    assert.equal(s.connection.pid, pid);
+    assert.equal(s.connection.generation, generation);
+  });
+});
+
+test('an idle deadline is recorded without buffering a notice into a later turn', async (t) => {
+  const s = setup(t, { requestMs: 150 });
+  s.session.onHookRun = () => new Promise(() => {});
+  await s.session.attach(undefined);
+  await s.connection.agent.notify('test/emit', hook(s.session, 'idle'));
+  await until(() => s.connection.debugLines().some((line) => line.includes('"event":"deadline"')), 'idle deadline');
+  const events: any[] = [];
+  s.session.consume((event) => events.push(event));
+  assert.equal(events.length, 0);
+  await s.session.startPrompt('next');
+  assert.equal(events.some((e) => e.kind === 'thought'), false);
+  assert.equal(s.connection.isOpen, true);
 });
 
 test('the leash itself drops a late response and emits late-reply after its synthetic denial', async (t) => {
   const s = setup(t);
-  // The real connection must drop immediately at deadline. A raw client keeps this fixture alive
-  // only to verify the other side of that boundary: a late Pi answer is never forwarded.
+  // The connection suppresses late responses locally. A raw client bypasses that protection
+  // to verify the leash's independent late-reply suppression.
   const child = spawn(process.execPath, [LEASH, '--parent', String(process.pid), '--stall-ms', '5000', '--request-ms', '150', '--', GROK, '--permission-mode', 'default', 'agent', '--no-leader', 'stdio'], {
     stdio: ['pipe', 'pipe', 'pipe'], env: { ...process.env, FAKE_GROK_LOG: s.grokLog, PI_GROK_LEASH_LOG: s.log },
   });
