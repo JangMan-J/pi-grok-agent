@@ -1,6 +1,6 @@
 # Grok Build as a Pi model: design
 
-Version 0.1.0. This page describes the implemented design. For use and settings, see the [README](../README.md) and [usage.md](usage.md).
+Version 0.1.8. This page describes the implemented design. For use and settings, see the [README](../README.md) and [usage.md](usage.md).
 
 Goal: `pi --model grok/<id>`, and any Pi caller that selects a model by ID, uses Grok Build as the model.
 Grok runs each turn on its own harness. Its native tools, permission rules, subagents, compaction, and history stay on the Grok side.
@@ -47,11 +47,10 @@ Grok returns `stopReason: cancelled` both for a Pi cancel and for a rejected per
 
 ## Tool result visibility
 
-Grok keeps the full result of each native tool in its own context. Pi keeps shortened copies:
+Grok keeps the full result of each native tool in its own context. Native tool activity does not go into Pi's thinking stream. Pi keeps shortened copies in its own entries:
 
 | Place | Limit | Source |
 | --- | --- | --- |
-| Thinking text, tool input and output | 400 characters each | `compact` in `src/model/session.ts` |
 | `grok-tool` entry `output` | 8000 characters | `resultText` in `src/model/session.ts` |
 | Rendered `grok-tool` line | 100 characters of input. Expanded: 600 characters of output. | `src/model.ts` |
 
@@ -115,7 +114,7 @@ These observations come from development runs of the scripts in `scripts/`. Thei
 
 ## Open items
 
-- Steering: verify the live effect of an interjection on the running turn, and check the active model before steering.
+- Steering: verify the live effect of an interjection on the running turn.
 - Pi skills under the Grok model: Pi expands `/skill:x` into the user message, and Grok receives it as plain text. Grok must translate Pi tool names such as `edit` and `bash` to its own tools. Not yet checked live. Earlier live checks ran with `--no-skills`.
 - Media: probe `image_edit` and the video result types. Video shows as a path only.
 - Gateway: add a way to restart the gateway on failure or login, for example a user service. Only the leader is supervised now.
@@ -126,5 +125,5 @@ These observations come from development runs of the scripts in `scripts/`. Thei
 
 - When the prompt response carries no usage report, usage and cost are zero.
 - The offered Pi tool list is read once for each Grok session.
-- Pi's transcript holds Grok tool activity as thinking text and custom entries, not as structured tool calls.
+- Pi's transcript holds Grok tool activity as `grok-tool` custom entries, not as structured tool calls.
 - Pi compaction does not change Grok's history. `/grok compact` compacts Grok's history.

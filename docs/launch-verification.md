@@ -1,6 +1,6 @@
 # Launch verification
 
-Live results for gate G4 in [launch.md](launch.md). Record each run here, not in `launch.md`. Raw results were written to `evidence/`, which is gitignored and not in the repository. Run the probes again to reproduce them ([usage.md](usage.md#live-probes)).
+Live results for gate G4 in [launch.md](launch.md). Record each run here, not in `launch.md`. Raw results were written to `evidence/`, which is gitignored and not in the repository. The outcomes below are the record of those runs, not proof that the current version behaves the same way. Treat each one as unverified for the current version until the probe runs again ([usage.md](usage.md#live-probes)).
 
 ## Run 2026-09-28
 
@@ -8,7 +8,7 @@ Versions: Node.js 26.10.0, Pi 0.87.1, Grok Build 1.0.41 (stable). Linux workstat
 
 Conditions: isolated gateway (`PI_GROK_LEADER_SOCKET`, `GROK_ACP_URL` on port 2429, `PI_CODING_AGENT_DIR` with a settings file that lists only this extension, `GROK_AGENT_SECRET` in both processes), started with `node scripts/server.ts` from the checkout at `0d29207` plus the uncommitted `evidence/` directory. The production gateway on 2419 was running and untouched throughout. Eight probes ran in sequence over 3 minutes 36 seconds; every one exited 0. `scripts/reconnect-probe.ts` was not run (not isolatable, see [usage.md](usage.md#live-probes)).
 
-| Command | Outcome | Evidence |
+| Command | Outcome | Raw result (not in the repository) |
 | --- | --- | --- |
 | `scripts/model-live.sh gateway` | Pass. `pi -p --model grok/grok-4.7` returned the token and `done.txt` was written. Pi executed 0 tools; Grok's harness ran `run_terminal_command` ×5 (default policy `extensions`, `headlessPermissions=allow`). | `evidence/model-live-gateway-extensions.json` |
 | `scripts/hooks-live.sh` | Pass, 3/3. Gate: read-only Pi session, `hashline_edit` failed and `settings.py` unchanged. Post-edit: broken edit repaired in the same turn (two `hashline_edit` completed, file valid). Stop: turn held until `done.txt` existed; Grok created it with `run_terminal_command`. | `evidence/hooks-live.json` |

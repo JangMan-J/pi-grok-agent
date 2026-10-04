@@ -1,6 +1,6 @@
 # pi-grok-agent reference
 
-This page is the reference for settings, commands, and operation. Start with the [README](../README.md) for requirements and the quick start. Design notes are in [first-class-model.md](first-class-model.md).
+This page is the reference for settings, commands, and operation. Start with the [README](../README.md) for the install command and requirements. Design notes are in [first-class-model.md](first-class-model.md).
 
 ## Contents
 
@@ -34,6 +34,10 @@ This page is the reference for settings, commands, and operation. Start with the
 | Permissions | `src/model/permissions.ts` | Pi dialogs and headless answers for Grok permission prompts. |
 | Questions | `src/model/questions.ts` | Pi dialogs for Grok's `ask_user_question`. |
 | Steering | `src/model/steer.ts` | Sends mid-turn Enter to Grok's `_x.ai/interject`. |
+| Lent tool policy | `src/tool-policy.ts`, `src/model/extensions-command.ts` | Selects the Pi tools lent to Grok, names them for MCP, and runs `/grok extensions`. |
+| Login | `src/login.ts` | Runs `grok login --device-auth` for `/grok login`. |
+| Auto-start | `src/launch.ts` | Starts the bundled gateway when nothing listens on the endpoint. |
+| Transport | `src/client.ts` | Validates the endpoint and carries JSON-RPC over the WebSocket. |
 | Gateway | `scripts/server.ts` | Supervises one `grok agent leader`, bridges each WebSocket to a stdio leader client, relays lent-tool MCP calls, and guards reverse requests. |
 | Settings | `src/config.ts` | Reads `grok-ws.json`, the secret, and environment overrides. Validates guard tiers. |
 
@@ -92,7 +96,7 @@ The steer handler acts only while the active model is `grok/*`. After a switch t
 
 | Command | Effect |
 | --- | --- |
-| `/grok debug` | Shows the gateway URL and connection state, the Grok session ID, Grok mode, Pi permission mode, Grok context size, usage and cost totals, lent tools, and hook decision counts. |
+| `/grok debug` | Shows the gateway URL and connection state, the Grok session ID, Grok mode, Pi permission mode, Grok context size, usage and cost totals, lent tools, blocked Pi extensions and the tools they withhold, and hook decision counts. |
 | `/grok login` | Runs `grok login --device-auth` in the background and shows the URL and code as an entry and a notice. Grok may open the page itself, in your default browser. Approve it there; Pi reports when the login finished. Works before any Grok session exists. A running gateway picks up the new login on the next turn, without a restart. |
 | `/grok perms` | Shows the Pi permission mode. |
 | `/grok perms auto` | Default. Mirrors the Pi session's tools onto Grok's tools. |
@@ -102,6 +106,7 @@ The steer handler acts only while the active model is `grok/*`. After a switch t
 | `/grok plan on`, `/grok plan off` | Sets Grok's session mode to `plan` or `default` with `session/set_mode`. |
 | `/grok goal <objective>`, `goal status`, `goal pause`, `goal resume`, `goal clear` | Sends Grok's `/goal` command. This is a Grok turn outside Pi's model loop. |
 | `/grok compact [note]` | Sends Grok's `/compact` on Grok's own history. This is a Grok turn. |
+| `/grok extensions [list \| block <name> \| unblock <name>]` | Shows or edits the blocked Pi extensions. See [Lent Pi tools](#lent-pi-tools). |
 
 `/grok goal` and `/grok compact` run through the same prompt lifetime as a normal turn. While one runs, the session is busy: a second command reports `Grok is busy with a turn`, and a normal message waits. A command times out after 10 minutes. The timeout cancels the prompt on Grok (`session/cancel`) and frees the session, and a late reply from the cancelled prompt is dropped.
 
@@ -357,13 +362,13 @@ npm run check        # tsc --noEmit
 npm test             # node --test test/*.test.ts, no Grok calls
 ```
 
-`test/gateway.test.ts` runs the real `scripts/server.ts` with `test/fixtures/fake-grok.ts` as the Grok binary (`PI_GROK_BINARY`) in a scratch `HOME`. It covers a launch that loses its port, leader ownership through shutdown, the guard tiers, the one-answer rule, disconnect, and `ask` mode's dialog deadline.
+`test/gateway.test.ts` runs the real `scripts/server.ts` with `test/fixtures/fake-grok.ts` as the Grok binary (`PI_GROK_BINARY`) in a scratch `HOME`. It covers a launch that loses its port, leader ownership through shutdown, the guard tiers, the one-answer rule, disconnect, `ask` mode's dialog deadline, a turn that outlives its Pi session, a missing secret file, gateway auto-start, a signed-out Grok, and the model switch.
 
-The unit tests cover the turn split around a lent tool call, abort and resend, prompt tail selection, display-only messages, usage mapping, tool classification and gates, `/grok perms` modes, guard tier validation, question dialogs, steering with a mocked Grok, the steer handler across a model switch, `/grok` command timeout and completion through the shared prompt lifetime, and media copies.
+The unit tests cover the turn split around a lent tool call, abort and resend, prompt tail selection, display-only messages, usage mapping, tool classification and gates, `/grok perms` modes, guard tier validation, question dialogs, steering with a mocked Grok, the steer handler across a model switch, `/grok` command timeout and completion through the shared prompt lifetime, media copies, the lent tool policy and names, `/grok extensions`, `/grok login` output parsing, and context windows from Grok's model cache.
 
 ## Live probes
 
-The scripts in `scripts/` run against a running gateway and your Grok login. They cost Grok usage. Several of them allow Grok's permission prompts inside temporary directories. They write JSON results to `evidence/` in the repository root. That directory is ignored by git. Create it first:
+The probe scripts in `scripts/` run against a running gateway and your Grok login. They cost Grok usage. Several of them allow Grok's permission prompts inside temporary directories. The scripts with a file in the `Writes` column below write JSON results to `evidence/` in the repository root. Git ignores that directory; the only tracked file in it is the demo video. Create it first:
 
 ```sh
 mkdir -p evidence
@@ -383,6 +388,11 @@ npm run test:live    # model-live.sh gateway, then hooks-live.sh
 | `scripts/reconnect-probe.ts` | Restarts the gateway, or stops the leader, between two turns. Turn 2 must keep context. | `evidence/reconnect-probe.json` or `evidence/reconnect-probe-leader.json` |
 | `scripts/hooks-probe.ts` | Raw ACP hook frames around a native tool call. | `evidence/hooks-probe.json` |
 | `scripts/perm-timing.ts`, `scripts/usage-probe.ts` | Permission round-trip timing and usage frames. | Standard output only |
+| `scripts/mcp-list-probe.ts` | Which tool fields `_x.ai/mcp/list` keeps for a Pi-hosted MCP server (`_meta`, `annotations`). | Standard output only |
+| `scripts/shell-permission-probe.ts` | What Grok does with a shell call when every permission prompt is cancelled. `PROBE_PROMPT` replaces the prompt. | Standard output only |
+| `scripts/modes-probe.ts` | Session modes and the commands Grok advertises. | Standard output only |
+| `scripts/cmd-probe.ts` | Grok's `/goal`, `/context`, and plan mode over raw ACP. | Standard output only |
+| `scripts/detail-probe.ts` | Session detail and config in the `session/new` response, and `session_info_update` after a turn. | Standard output only |
 
 `scripts/reconnect-probe.ts` is not isolated. It hardcodes port 2419 and reads a gateway PID from `~/.pi/agent/grok-ws.pid`, a file that `npm run server` does not write. It sends SIGTERM to that PID (gateway mode) or to its `agent leader` child (leader mode). `GROK_ACP_URL`, `PI_CODING_AGENT_DIR`, and the other variables do not change these targets. Run it only when the default gateway on 2419 is disposable and the PID file names it. Its check for other clients looks only at port 2419.
 

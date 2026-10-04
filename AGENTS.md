@@ -38,9 +38,9 @@ For an isolated gateway, set all three: `PI_GROK_LEADER_SOCKET` to a new socket 
 
 Invariants:
 
-- Grok native tool calls stay on Grok. They become thinking text and `grok-tool` entries, never Pi tool calls (`test/model.test.ts`).
+- Grok native tool calls stay on Grok. They become `grok-tool` entries, never thinking text or Pi tool calls (`test/model.test.ts`).
 - Custom entries and `grok-media` messages are display only. The provider never sends them to Grok.
-- Grok's model context keeps full tool results. Pi's copies are shortened: 400 characters in the thinking stream, 8000 in a `grok-tool` entry, 600 in the expanded renderer.
+- Grok's model context keeps full tool results. Pi's copies are shortened: 8000 characters in a `grok-tool` entry, 600 in the expanded renderer. Native tool activity stays out of the thinking stream.
 - The gateway starts Grok in default permission mode. Keep `--always-approve` out of `LEADER_ARGS`.
 
 ## Documentation claims
