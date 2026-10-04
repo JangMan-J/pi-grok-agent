@@ -24,8 +24,6 @@ jobs:
       # package-lock.json is not tracked, so install from package.json.
       - run: npm install
       - run: npm run check
-      # Unit tests, plus the gateway test against a fake Grok binary.
+      # Unit tests, plus the stdio transport test against a fake Grok binary.
       # Nothing contacts Grok.
       - run: npm test
-        env:
-          PI_GROK_AUTOSTART: '0'

@@ -34,8 +34,6 @@ jobs:
       - run: npm install
       - run: npm run check
       - run: npm test
-        env:
-          PI_GROK_AUTOSTART: '0'
       # Pack once, then publish and attach that same file,
       # so the release asset is byte for byte what npm has.
       - name: Pack

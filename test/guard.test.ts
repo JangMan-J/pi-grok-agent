@@ -17,3 +17,32 @@ test('guard rejects tiers that would let Grok fail open first', () => {
   assert.throws(() => resolveGuard({ ackMs: -1 }, {}), /positive number/);
   assert.throws(() => resolveGuard(undefined, { PI_GROK_POLICY_MS: 'soon' }), /positive number/);
 });
+
+test('close-time guard settles once, drops every late answer, and leaves unguarded traffic alone', async () => {
+  const { ReverseRequestGuard } = await import('../src/model/guard.ts');
+  const replies: any[] = [];
+  const guard = new ReverseRequestGuard((message) => replies.push(message));
+  const hook = (id: string, hookEventName: string) => ({ jsonrpc: '2.0', id, method: '_x.ai/hooks/run', params: { hookEventName } });
+  guard.watch(hook('answered', 'pre_tool_use'));
+  const answer = { jsonrpc: '2.0', id: 'answered', result: { decision: 'continue' } };
+  assert.equal(guard.settle(answer), 'forward');
+  assert.equal(guard.settle(answer), 'drop');
+  for (const event of ['pre_tool_use', 'post_tool_use', 'stop']) guard.watch(hook(event, event));
+  guard.watch({ jsonrpc: '2.0', id: 'question', method: '_x.ai/ask_user_question' });
+  guard.watch({ jsonrpc: '2.0', id: 'permission', method: 'session/request_permission', params: { options: [{ kind: 'reject_always', optionId: 'no' }] } });
+  guard.watch({ jsonrpc: '2.0', id: 'cancel', method: 'session/request_permission', params: { options: [] } });
+  guard.close('Pi connection closed');
+  guard.close('again');
+  assert.deepEqual(replies.map((reply) => reply.result), [
+    { decision: 'deny', reason: 'Denied because the Pi session is gone: Pi connection closed.' },
+    { decision: 'continue' }, { decision: 'continue' }, { outcome: 'cancelled' },
+    { outcome: { outcome: 'selected', optionId: 'no' } }, { outcome: { outcome: 'cancelled' } },
+  ]);
+  for (const reply of replies) {
+    assert.equal(guard.settle(reply), 'drop');
+    assert.equal(guard.settle(reply), 'drop');
+  }
+  assert.equal(guard.lateAnswersDropped, 13);
+  assert.equal(guard.settle({ jsonrpc: '2.0', id: 'other', result: {} }), 'forward');
+  assert.equal(guard.settle({ jsonrpc: '2.0', method: 'notify', params: {} }), 'forward');
+});

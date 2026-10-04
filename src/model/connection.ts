@@ -2,11 +2,11 @@
 import { client, ndJsonStream, type AnyMessage, type ClientConnection, type InitializeResponse, type NewSessionResponse, type LoadSessionResponse, type SessionNotification, type RequestPermissionRequest, type RequestPermissionResponse } from '@agentclientprotocol/sdk';
 import { spawn, type ChildProcessByStdio } from 'node:child_process';
 import { Readable, Writable } from 'node:stream';
-import { GATE_REGISTRATION_MS } from '../config.ts';
+import { GATE_REGISTRATION_MS, type McpMode } from '../config.ts';
 import { ReverseRequestGuard } from './guard.ts';
 import { startMcpServer } from './mcp-server.ts';
 
-export type ConnectionOptions = { binary?: string; env?: NodeJS.ProcessEnv };
+export type ConnectionOptions = { binary?: string; env?: NodeJS.ProcessEnv; mcp?: McpMode };
 type AgentChild = ChildProcessByStdio<Writable, Readable, null>;
 
 export type McpToolDefinition = { name: string; description: string; inputSchema: Record<string, unknown> };
@@ -142,12 +142,24 @@ export class GrokModelConnection {
           .onNotification('_x.ai/hooks/event', (raw) => raw as any, ({ params }) => {
             this.sessions.get(params.sessionId ?? params.session_id)?.onHookEvent?.(params);
           })
+          .onRequest('_x.ai/mcp/sdk_call', (raw) => raw as { serverId: string; message: SdkCall }, async ({ params }) => {
+            const { message, serverId } = params;
+            try {
+              const handlers = this.servers.get(serverId);
+              if (!handlers) throw new Error(`no session for server ${serverId}`);
+              const result = await handlers.onMcp(message);
+              return { jsonrpc: '2.0', id: message.id, result };
+            } catch (error) {
+              return { jsonrpc: '2.0', id: message.id, error: { code: -32603, message: error instanceof Error ? error.message : String(error) } };
+            }
+          })
           .connect(guardedStream);
         const agent = this.connection.agent;
         this.initialized = await Promise.race([ended, agent.request('initialize', {
           protocolVersion: 1,
           clientInfo: { name: 'pi-grok-model', version: '0.1.0' },
           clientCapabilities: { fs: { readTextFile: false, writeTextFile: false }, terminal: false },
+          ...(this.options.mcp === 'sdk' ? { _meta: { 'x.ai/mcp/sdk': true } } : {}),
         })]);
         if ((this.initialized.authMethods ?? []).some((m) => m.id === 'cached_token')) {
           await Promise.race([ended, agent.request('authenticate', { methodId: 'cached_token' })]);
@@ -187,8 +199,12 @@ export class GrokModelConnection {
     if (input.hooks !== false) _meta['x.ai/hooks'] = CLIENT_HOOKS;
     const mcpServers: unknown[] = [];
     if (input.offerPiTools) {
-      await this.ensureMcpServer();
-      mcpServers.push({ type: 'http', name: input.serverName, url: `${this.mcpBaseUrl}/mcp/${input.serverId}`, headers: [] });
+      if (this.options.mcp === 'sdk') {
+        _meta['x.ai/mcp/servers'] = [{ name: input.serverName, serverId: input.serverId }];
+      } else {
+        await this.ensureMcpServer();
+        mcpServers.push({ type: 'http', name: input.serverName, url: `${this.mcpBaseUrl}/mcp/${input.serverId}`, headers: [] });
+      }
       _meta.mcpConfig = { [input.serverName]: { toolTimeoutMs: input.toolTimeoutMs ?? 6 * 60 * 60 * 1000 } };
     }
     if (input.rules) _meta.rules = input.rules;

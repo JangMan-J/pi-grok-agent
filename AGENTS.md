@@ -15,7 +15,7 @@ Scripts are in `package.json`. Run `npm install` once before any check. The `pi`
 
 ## Child ownership
 
-`src/model/connection.ts` starts one non-detached `grok --permission-mode default agent --no-leader stdio` child per connection. No leader, daemon, port, or secret file. `drop()` and `close()` end only that child. `PI_GROK_BINARY` and `PI_CODING_AGENT_DIR` are inherited at spawn time. Loading the extension must not spawn Grok.
+`src/model/connection.ts` starts one non-detached `grok --permission-mode default agent --no-leader stdio` child per connection. No leader, daemon, fixed ACP port, or secret file. `drop()` and `close()` end only that child. `PI_GROK_BINARY` and `PI_CODING_AGENT_DIR` are inherited at spawn time. Loading the extension must not spawn Grok. Child env forces `GROK_DISABLE_AUTOUPDATER=1`. `PI_GROK_MCP` is read once by `readConfig`: HTTP is the default; SDK is temporary for one live comparison, after which one path must be removed.
 
 ## Architecture
 

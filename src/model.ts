@@ -1,4 +1,4 @@
-// Pi extension: registers the `grok` model provider backed by Grok Build over WebSocket ACP.
+// Pi extension: registers the `grok` model provider backed by a Grok Build stdio ACP child.
 import type { ExtensionAPI, ExtensionContext } from '@earendil-works/pi-coding-agent';
 import { Box, Container, Image, Spacer, Text, getCapabilities } from '@earendil-works/pi-tui';
 import { execFileSync } from 'node:child_process';
@@ -77,7 +77,7 @@ export default async function grokModel(pi: ExtensionAPI) {
   // Live blocked Pi extension set: `/grok extensions` mutates this Set in place and persists it, so the
   // next Grok session lends the updated set without a Pi reload. (Grok reads the tool list once per session.)
   const blockedPiExtensions = new Set(config.blockedPiExtensions);
-  const connection = new GrokModelConnection();
+  const connection = new GrokModelConnection({ mcp: config.mcp });
   let current: GrokModelSession | undefined;
   // Pi-side permission mode, persisted as `permissionMode` in grok-ws.json so a chosen `/grok perms`
   // survives Pi restarts. Applied to every Grok session in configure().

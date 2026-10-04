@@ -33,12 +33,14 @@ if (args.includes('leader')) {
     if (message.method === 'test/emit') { send(message.params); return; }
     // Signed in, Grok offers cached_token. FAKE_GROK_LOGGED_OUT=1 offers only the interactive method, as a real logged-out Grok does.
     if (message.method === 'initialize') {
+      if (log) appendFileSync(log, JSON.stringify({ id: 'initialize', params: message.params }) + '\n');
       const authMethods = process.env.FAKE_GROK_LOGGED_OUT === '1' ? [{ id: 'grok.com', name: 'Grok' }] : [{ id: 'cached_token', name: 'Cached token' }];
       send({ jsonrpc: '2.0', id: message.id, result: { protocolVersion: 1, agentCapabilities: {}, authMethods } }); return;
     }
     if (message.method === 'authenticate') { send({ jsonrpc: '2.0', id: message.id, result: {} }); return; }
     // FAKE_GROK_MODELS=a,b: the models this account may use, reported as the `model` config option (first is current).
     if (message.method === 'session/new') {
+      if (log) appendFileSync(log, JSON.stringify({ id: 'session/new', params: message.params }) + '\n');
       const models = (process.env.FAKE_GROK_MODELS ?? '').split(',').filter(Boolean);
       const configOptions = models.length ? [{ id: 'model', currentValue: models[0], options: models.map((value) => ({ value, name: value })) }] : undefined;
       const mcpUrl = message.params?.mcpServers?.[0]?.url;
@@ -49,7 +51,7 @@ if (args.includes('leader')) {
       send({ jsonrpc: '2.0', id: message.id, result: { sessionId: 'fake-session', ...(configOptions ? { configOptions } : {}) } }); return;
     }
     if (message.method === 'session/set_config_option') { if (log) appendFileSync(log, JSON.stringify({ id: 'set_config_option', params: message.params }) + '\n'); send({ jsonrpc: '2.0', id: message.id, result: {} }); return; }
-    if (message.method === 'session/load') { send({ jsonrpc: '2.0', id: message.id, result: {} }); return; }
+    if (message.method === 'session/load') { if (log) appendFileSync(log, JSON.stringify({ id: 'session/load', params: message.params }) + '\n'); send({ jsonrpc: '2.0', id: message.id, result: {} }); return; }
     if ('id' in message && ('result' in message || 'error' in message)) { if (log) appendFileSync(log, line + '\n'); return; }
     if ('id' in message && message.id != null) send({ jsonrpc: '2.0', id: message.id, error: { code: -32601, message: `fake grok does not implement ${String(message.method)}` } });
   });

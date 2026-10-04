@@ -28,7 +28,7 @@ Pi extension <-- ACP over stdio --> grok --permission-mode default agent --no-le
              <-- HTTP MCP ------> 127.0.0.1:<ephemeral>/mcp/<serverId> (hosted inside Pi)
 ```
 
-The first Grok turn starts one non-detached agent child per Pi process, not a shared leader or daemon. Loading the extension alone starts nothing. Pi uses the [Agent Client Protocol](https://agentclientprotocol.com) over stdin/stdout; Grok runs its own tools and asks Pi through hooks and dialogs. Lent Pi tools use an in-process loopback HTTP MCP server. Source: `src/model/connection.ts`, `src/model/mcp-server.ts`; fake-child checks: `test/transport.test.ts`. Details: [architecture](docs/architecture-diagram.md) · [usage](docs/usage.md).
+The first Grok turn starts one non-detached agent child per Pi process, not a shared leader or daemon. Loading the extension alone starts nothing. Pi uses the [Agent Client Protocol](https://agentclientprotocol.com) over stdin/stdout; Grok runs its own tools and asks Pi through hooks and dialogs. Lent Pi tools use an in-process loopback HTTP MCP server by default. The environment-only `PI_GROK_MCP=sdk` switch enables a temporary ACP MCP path for one live comparison; after that probe one path will be deleted. Other values besides `http` and `sdk` are rejected at load. Source: `src/model/connection.ts`, `src/model/mcp-server.ts`; fake-child checks: `test/transport.test.ts`. Details: [architecture](docs/architecture-diagram.md) · [usage](docs/usage.md).
 
 ## Function
 

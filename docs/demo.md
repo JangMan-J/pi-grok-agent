@@ -19,24 +19,16 @@ The clip shows one idea: Grok Build's own agent does the work inside Pi, and Pi 
 
 Record in a terminal that shows images inline, so that the image shot works. Install ImageMagick (`magick`), because `image_gen` wrote JPEG in development runs, and Pi needs `magick` to show JPEG, WebP, or GIF inline. PNG needs no converter. Log in with `grok login` before you record.
 
-Use an isolated gateway, so that the recording does not touch a gateway that is in use. Do not run `scripts/reconnect-probe.ts` during the demo: it targets the default gateway on port 2419 whatever these variables say. Set these variables in both terminals:
+Use a separate Pi agent directory and a scratch demo project. Each Pi starts its own stdio agent child (`src/model/connection.ts`); no separate transport terminal is needed. Live stdio-direct behavior is still pending validation, so rehearse before recording.
 
 ```sh
 export PI_CODING_AGENT_DIR="$HOME/.pi-grok-demo/agent"
-export GROK_ACP_URL=ws://127.0.0.1:2429/ws
-export PI_GROK_LEADER_SOCKET="$HOME/.grok/pi/demo-leader.sock"
 export CLONE="$HOME/pi-grok-agent"   # change to the path of your clone
-```
-
-Terminal A, the gateway (not recorded):
-
-```sh
 cd "$CLONE"
 npm install --omit=dev
-npm run server
 ```
 
-Terminal B, the demo project (recorded):
+Demo project (recorded):
 
 ```sh
 DEMO=$(mktemp -d)
@@ -72,9 +64,9 @@ The times are for the edited clip. Real turns take longer and get time-cut label
 | Time | Shot | Input | Expected visible result |
 | --- | --- | --- | --- |
 | 0:00 to 0:04 | Title card | None | Text: "Grok Build's own agent, as a Pi model". Subtitle: `pi --model grok/grok-4.7`. |
-| 0:04 to 0:08 | The failing test | `node --test` in terminal B | Real failure output with `7 !== 9`. |
+| 0:04 to 0:08 | The failing test | `node --test` in the demo terminal | Real failure output with `7 !== 9`. |
 | 0:08 to 0:11 | Start Pi | `pi -e "$CLONE" --model grok/grok-4.7` | Pi starts. The footer shows the selected Grok model. |
-| 0:11 to 0:26 | Grok fixes the bug | Prompt 1 (below) | `grok-tool` lines, one for each Grok tool call, for example `✓ grok read_file …`, an edit tool, and a shell tool, each with a duration. Thinking text with `[grok <tool>]` lines. A final answer that says the test passes. If Grok asks for permission, a Pi dialog appears. Select the allow-once option on camera. |
+| 0:11 to 0:26 | Grok fixes the bug | Prompt 1 (below) | `grok-tool` lines, one for each Grok tool call, for example `✓ grok read_file …`, an edit tool, and a shell tool, each with a duration. Routine calls may be grouped as `grok-tools` rows; native calls are not thinking text (`src/model/session.ts`). A final answer that says the test passes. If Grok asks for permission, a Pi dialog appears. Select the allow-once option on camera. |
 | 0:26 to 0:30 | Proof of the fix | `!!cat sum.mjs` then `!!node --test` | The loop starts at `0`. The test passes. |
 | 0:30 to 0:40 | Pi's gate on Grok | `/grok perms read-only`, then prompt 2 | A notice `Grok permission mode: readonly`. A denied line such as `⊘ grok search_replace …` with `denied: This Pi session is read-only: no file edits or writes. Report findings instead.` Grok's answer reports the denial. |
 | 0:40 to 0:42 | Restore the gate | `/grok perms auto` | A notice `Grok permission mode: auto`. |
@@ -104,7 +96,7 @@ The clip has no steering shot. The live effect of mid-turn Enter on a running Gr
 - Terminal text recorders can fail to show inline images in playback. Use a screen recorder for the image shot, or for the whole take.
 - Use a large font and a terminal width of 100 to 120 columns.
 - Hide unrelated shell history, tokens, and paths in the home directory before the take.
-- `/grok debug` gives a good still frame for a post or an issue: gateway, session, modes, usage, and cost. Blur the Grok session ID before you publish it.
+- `/grok debug` gives a good still frame for a post or an issue: stdio child, session, modes, usage, and cost. Blur the Grok session ID before you publish it.
 
 ## After the take
 
@@ -119,4 +111,4 @@ rm -rf "$DEMO"
 rm -rf "$HOME/.pi-grok-demo"
 ```
 
-Press Ctrl+C in terminal A. The gateway stops its bridges and its demo leader. Grok keeps the sessions of the demo under `~/.grok/`.
+Exit Pi before removing the scratch directories. Pi closes its stdio agent child. Grok manages its stored sessions under `~/.grok/`.

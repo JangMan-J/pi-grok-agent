@@ -5,20 +5,15 @@ import { join } from 'node:path';
 import test from 'node:test';
 import type { ExtensionAPI, ExtensionContext, InputEvent, InputEventResult } from '@earendil-works/pi-coding-agent';
 
-// These tests load the real extension. It must never start a real gateway (and a real Grok leader) from a test.
-process.env.PI_GROK_AUTOSTART = '0';
+// Loading the real extension must not spawn Grok.
 
 test('registered input handler leaves other models alone after a Grok session', async (t) => {
   const dir = await mkdtemp(join(tmpdir(), 'pi-grok-extension-test-'));
   const oldDir = process.env.PI_CODING_AGENT_DIR;
-  const oldSecret = process.env.GROK_AGENT_SECRET;
   process.env.PI_CODING_AGENT_DIR = dir;
-  process.env.GROK_AGENT_SECRET = 'test-secret';
   t.after(async () => {
     if (oldDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
     else process.env.PI_CODING_AGENT_DIR = oldDir;
-    if (oldSecret === undefined) delete process.env.GROK_AGENT_SECRET;
-    else process.env.GROK_AGENT_SECRET = oldSecret;
     await rm(dir, { recursive: true, force: true });
   });
   const { default: grokModel } = await import('../src/model.ts');
@@ -58,23 +53,17 @@ test('registered input handler leaves other models alone after a Grok session', 
   assert.deepEqual(await input(steer, ctx), { action: 'handled' }, 'switching back still steers Grok');
 });
 
-test('the extension loads without the gateway secret file; the secret is read at connect time', async (t) => {
-  const dir = await mkdtemp(join(tmpdir(), 'pi-grok-extension-nosecret-'));
-  const oldSecret = process.env.GROK_AGENT_SECRET;
-  delete process.env.GROK_AGENT_SECRET;
-  t.after(async () => {
-    if (oldSecret !== undefined) process.env.GROK_AGENT_SECRET = oldSecret;
-    await rm(dir, { recursive: true, force: true });
-  });
+test('loading the extension registers its provider without opening a child', async (t) => {
   const { default: grokModel } = await import('../src/model.ts');
-  const { defaultSecretFile } = await import('../src/config.ts');
-  await rm(defaultSecretFile, { force: true });
+  const { GrokModelConnection } = await import('../src/model/connection.ts');
+  const opened = t.mock.method(GrokModelConnection.prototype, 'open', async () => { throw new Error('must not spawn at load'); });
   let provider: unknown;
   const pi = {
     on() {}, registerProvider: (...args: unknown[]) => { provider = args; }, registerMessageRenderer() {}, registerEntryRenderer() {}, registerCommand() {}, appendEntry() {},
   } as unknown as ExtensionAPI;
-  await grokModel(pi); // Pi exits on any extension load error, so this must not throw
-  assert.ok(provider, 'the grok provider is registered even though no secret exists yet');
+  await grokModel(pi);
+  assert.ok(provider);
+  assert.equal(opened.mock.callCount(), 0);
 });
 
 test('context windows come from Grok Build\'s model cache; bad values and a missing cache are skipped', async (t) => {
@@ -99,14 +88,10 @@ test('context windows come from Grok Build\'s model cache; bad values and a miss
 test('tool rows keep call order and flush before tree navigation and shutdown', async (t) => {
   const dir = await mkdtemp(join(tmpdir(), 'pi-grok-extension-test-'));
   const oldDir = process.env.PI_CODING_AGENT_DIR;
-  const oldSecret = process.env.GROK_AGENT_SECRET;
   process.env.PI_CODING_AGENT_DIR = dir;
-  process.env.GROK_AGENT_SECRET = 'test-secret';
   t.after(async () => {
     if (oldDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
     else process.env.PI_CODING_AGENT_DIR = oldDir;
-    if (oldSecret === undefined) delete process.env.GROK_AGENT_SECRET;
-    else process.env.GROK_AGENT_SECRET = oldSecret;
     await rm(dir, { recursive: true, force: true });
   });
   const { default: grokModel } = await import('../src/model.ts');

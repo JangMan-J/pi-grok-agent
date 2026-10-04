@@ -85,7 +85,7 @@
   "scripts": {
     "test": "node --test test/*.test.ts",
     "check": "tsc --noEmit",
-    "test:live": "scripts/model-live.sh gateway && scripts/hooks-live.sh"
+    "test:live": "node scripts/model-probe.ts && node scripts/reconnect-probe.ts"
   },
   "dependencies": {
     "@agentclientprotocol/sdk": "1.5.0",

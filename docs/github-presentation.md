@@ -105,7 +105,7 @@ The GitHub API confirmed the exact description and all 11 topics.
 
 | Reader | Entry point | Next action |
 | --- | --- | --- |
-| Developer who wants to try it | [README](../README.md) | Run `pi install npm:pi-grok-agent`, then pick a `grok/` model in `/models`. The first Grok turn starts the gateway. |
+| Developer who wants to try it | [README](../README.md) | Run `pi install npm:pi-grok-agent`, then pick a `grok/` model in `/models`. The first Grok turn starts the stdio agent child (`src/model/connection.ts`). |
 | Agent evaluating the integration | [README: Safety](../README.md#safety) and [Notes](../README.md#notes) | Read requirements, limits, and headless permission behavior before setup. |
 | Contributor or coding agent | [AGENTS.md](../AGENTS.md) | Follow the source map and run the declared checks. |
 | User with a failed setup | [First-run issue form](../.github/ISSUE_TEMPLATE/first-run.yml) | Report versions, the last successful step, and a redacted reproduction. |
