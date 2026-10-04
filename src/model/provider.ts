@@ -79,7 +79,7 @@ export type LentTool = { callableName: string; piName: string; description: stri
 export function grokRulesFromPiPrompt(systemPrompt: string | undefined, lentTools: readonly LentTool[] = []): string | undefined {
   let prompt = systemPrompt ?? '';
   for (const section of PI_HARNESS_PROMPT_SECTIONS) prompt = removeXmlSection(prompt, section);
-  prompt = prompt.replace(/[ \t]*<skill(?:\s[^>]*)?>[\s\S]*?<\/skill>\n?/gu, (entry) => (/<location>[^<]*[\\/]\.agents[\\/]skills[\\/]/u.test(entry) ? '' : entry));
+  prompt = prompt.replace(/[ \t]*<skill(?:\s[^>]*)?>[\s\S]*?<\/skill>\n?/gu, (entry) => (/(?:<location>|location=")[^<"]*[\\/]\.agents[\\/]skills[\\/]/u.test(entry) ? '' : entry));
   if (!/<skill(?:\s[^>]*)?>/u.test(prompt)) prompt = removeXmlSection(prompt, 'skills');
   prompt = prompt.replace(/\n{3,}/gu, '\n\n').trim();
   const bridge = [

@@ -174,3 +174,15 @@ test('/grok perms yolo: everything allowed regardless of Pi tools, no dialogs', 
   assert.equal((await pre('run_terminal_command')).decision, 'continue', 'shell allowed, no dialog');
   assert.deepEqual(asked, []);
 });
+
+test('hook decisions retain the last 500 entries without truncating the call count', async () => {
+  const session = new GrokModelSession({ isOpen: true } as any, 'pi-log', '/repo');
+  session.piToolNames = ['read'];
+  for (let n = 0; n < 505; n++) {
+    await session.onHookRun({ hookCallbackId: 'pi-pre', hookEventName: 'pre_tool_use', sessionId: 'g', cwd: '/repo', toolName: `read-${n}`, toolUseId: `u-${n}` });
+  }
+  assert.equal(session.toolCallsSeen, 505);
+  assert.equal(session.hookLog.length, 500);
+  assert.equal(session.hookLog[0].tool, 'read-5');
+  assert.equal(session.hookLog.at(-1)?.tool, 'read-504');
+});

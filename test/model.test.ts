@@ -71,6 +71,22 @@ test('Grok rules strip Pi harness tool prose but keep project context', () => {
   assert.doesNotMatch(rules, /Use codemode/);
 });
 
+test('skill catalog filtering handles attributes and Windows paths without losing retained entries', () => {
+  const rules = grokRulesFromPiPrompt(String.raw`<skills>
+<available_skills>
+<skill name="shared" location="/home/u/.agents/skills/shared/SKILL.md">Shared</skill>
+<skill name="windows"><location>C:\Users\u\.agents\skills\windows\SKILL.md</location></skill>
+<skill name="win-attr" location="C:\Users\u\.agents\skills\win-attr\SKILL.md">Shared Windows</skill>
+<skill name="package" location="/home/u/.pi/agent/npm/node_modules/example/SKILL.md">Keep package</skill>
+</available_skills>
+</skills>`)!;
+  assert.doesNotMatch(rules, /name="(?:shared|windows|win-attr)"/);
+  assert.match(rules, /<skills>/, 'a non-empty catalog is retained');
+  assert.match(rules, /<skill name="package" location=".*">Keep package<\/skill>/);
+  const empty = grokRulesFromPiPrompt('<skills>\n<skill name="shared" location="/home/u/.agents/skills/shared/SKILL.md">Shared</skill>\n</skills>')!;
+  assert.doesNotMatch(empty, /<skills>/, 'an all-shared catalog is removed');
+});
+
 test('one Grok turn becomes two Pi assistant messages around a Pi tool call', async () => {
   const fake = fakeConnection();
   const session = new GrokModelSession(fake.connection, 'pi-session-1', '/repo');
@@ -144,6 +160,8 @@ test('Grok calls a lent tool by its listed name and Pi executes the original', a
   void h.onMcp({ method: 'tools/call', id: 2, params: { name: 'mcp_docs_search', arguments: { q: 'x' } } });
   assert.deepEqual(events.map((event) => [event.kind, event.name, event.arguments]), [['toolcall', 'mcp__docs__search', { q: 'x' }]]);
   await assert.rejects(h.onMcp({ method: 'tools/call', id: 3, params: { name: 'pi__mcp_docs_search', arguments: {} } }), /Unknown Pi tool/);
+  void h.onMcp({ method: 'tools/call', id: 4, params: { name: 'mcp__docs__search', arguments: { q: 'original' } } });
+  assert.deepEqual([events.at(-1).name, events.at(-1).arguments], ['mcp__docs__search', { q: 'original' }]);
 });
 
 test('abort cancels the Grok prompt and rejects parked tool calls', async () => {

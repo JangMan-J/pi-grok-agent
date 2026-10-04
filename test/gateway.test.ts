@@ -154,7 +154,7 @@ test('ask mode: a slow human confirm is waited for as a dialog, not denied at th
   assert.deepEqual(session.hookLog.map((h) => h.decision), ['continue']);
 });
 
-test('Grok lists the lent Pi tools while session/new is still pending', async (t) => {
+test('simulated Grok lists lent Pi tools while session/new is still pending', async (t) => {
   const s = scratch(); t.after(s.cleanup);
   const port = await freePort();
   const gw = startGateway(gatewayEnv(s, port, { FAKE_GROK_MCP_LIST: '1' }));
@@ -273,4 +273,30 @@ test('the model picked in Pi is applied to the Grok session; one the account lac
   await until(() => received(s, 'set_config_option').length === 1, 'set_config_option at Grok');
   assert.deepEqual(received(s, 'set_config_option')[0].params, { sessionId: 'fake-session', configId: 'model', value: 'grok-4.6' });
   await assert.rejects(session.applyModel('grok-4.5'), /grok-4\.5 is not available on this Grok account\. Available: grok-4\.7, grok-4\.6/);
+});
+
+test('failed session attach removes only its own early routing registrations', async (t) => {
+  const connection = new GrokModelConnection({ url: 'ws://127.0.0.1:1/ws', secret: SECRET });
+  t.after(() => connection.close());
+  const handlers = {} as import('../src/model/connection.ts').SessionHandlers;
+  const replacement = {} as import('../src/model/connection.ts').SessionHandlers;
+  const routes = connection as any;
+  let replace = false;
+  t.mock.getter(GrokModelConnection.prototype, 'agent', () => ({
+    request: async () => {
+      assert.equal(routes.servers.get('server'), handlers, 'registered before request');
+      if (replace) { routes.servers.set('server', replacement); routes.sessions.set('loaded', replacement); }
+      throw new Error('attach failed');
+    },
+  }) as never);
+  const input = { cwd: '/repo', serverId: 'server', serverName: 'pi', offerPiTools: true, handlers };
+  await assert.rejects(connection.attachSession(input), /attach failed/);
+  assert.equal(routes.servers.size, 0);
+  await assert.rejects(connection.attachSession({ ...input, sessionId: 'loaded' }), /attach failed/);
+  assert.equal(routes.servers.size, 0);
+  assert.equal(routes.sessions.size, 0);
+  replace = true;
+  await assert.rejects(connection.attachSession({ ...input, sessionId: 'loaded' }), /attach failed/);
+  assert.equal(routes.servers.get('server'), replacement, 'do not remove a newer registration');
+  assert.equal(routes.sessions.get('loaded'), replacement);
 });
