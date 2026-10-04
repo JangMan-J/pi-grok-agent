@@ -85,6 +85,7 @@
   "scripts": {
     "test": "node --test test/*.test.ts",
     "check": "tsc --noEmit",
+    "build:leash": "cd leash && cargo build --release && mkdir -p ../bin && cp target/release/pi-grok-leash ../bin/",
     "test:live": "node scripts/model-probe.ts && node scripts/reconnect-probe.ts"
   },
   "dependencies": {
