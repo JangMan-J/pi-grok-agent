@@ -392,6 +392,7 @@ npm run test:live    # model-live.sh gateway, then hooks-live.sh
 | `scripts/queue-probe.ts [interject]` | A second prompt or an interject while a turn runs. Prints a timeline. | Standard output only |
 | `scripts/reconnect-probe.ts` | Restarts the gateway, or stops the leader, between two turns. Turn 2 must keep context. | `evidence/reconnect-probe.json` or `evidence/reconnect-probe-leader.json` |
 | `scripts/hooks-probe.ts` | Raw ACP hook frames around a native tool call. | `evidence/hooks-probe.json` |
+| `scripts/client-gone-probe.ts [kill\|control] [--no-leader]` | Spawns a Grok stdio client directly, no gateway. Kills it with a `pre_tool_use` hook unanswered and checks whether the tool still ran. See [launch-verification.md](launch-verification.md#client-death-probe-2026-10-04). | `evidence/client-gone-probe-<mode>[-no-leader].json` |
 | `scripts/perm-timing.ts`, `scripts/usage-probe.ts` | Permission round-trip timing and usage frames. | Standard output only |
 | `scripts/mcp-list-probe.ts` | Which tool fields `_x.ai/mcp/list` keeps for a Pi-hosted MCP server (`_meta`, `annotations`). | Standard output only |
 | `scripts/shell-permission-probe.ts` | What Grok does with a shell call when every permission prompt is cancelled. `PROBE_PROMPT` replaces the prompt. | Standard output only |
