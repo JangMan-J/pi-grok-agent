@@ -168,6 +168,28 @@ test('the leash itself drops a late response and emits late-reply after its synt
   assert.equal(rows(s.log).filter((r) => r.params?.event === 'late-reply').length, 1);
 });
 
+test('slow Grok stdin cannot starve leash heartbeat consumption', async (t) => {
+  const s = setup(t);
+  const script = join(s.home, 'blocked-stdin.js');
+  writeFileSync(script, 'setInterval(() => {}, 60000);\n');
+  const child = spawn(process.execPath, [LEASH, '--parent', String(process.pid), '--stall-ms', '350', '--', process.execPath, script], {
+    stdio: ['pipe', 'pipe', 'pipe'], env: { ...process.env, PI_GROK_LEASH_LOG: s.log },
+  });
+  const exited = once(child, 'exit');
+  child.stdout.resume();
+  child.stdin.on('error', () => {});
+  const heartbeat = setInterval(() => child.stdin.write('{"jsonrpc":"2.0","method":"pi/heartbeat"}\n', () => {}), 100);
+  t.after(async () => { clearInterval(heartbeat); child.stdin.end(); await exited; });
+  await until(() => rows(s.log).some((r) => r.params?.event === 'ready'), 'ready');
+  child.stdin.write(JSON.stringify({ jsonrpc: '2.0', method: 'blocked', params: { text: 'x'.repeat(2_000_000) } }) + '\n');
+  await until(() => rows(s.log).filter((r) => r.event === 'heartbeat').length >= 7, 'heartbeats beyond the stall window');
+  assert.equal(child.exitCode, null);
+  assert.equal(rows(s.log).some((r) => r.params?.event === 'stall'), false);
+  clearInterval(heartbeat);
+  child.stdin.end();
+  await exited;
+});
+
 test('missing leash refuses startup, names the build command, and never spawns Grok', async (t) => {
   const s = setup(t, { leashPath: join(tmpdir(), 'pi-grok-leash-does-not-exist') });
   await assert.rejects(s.connection.open(), /Cannot start pi-grok-leash[\s\S]*npm run build:leash/);

@@ -149,7 +149,9 @@ void (async () => {
       if (answered.has(key)) { await event('late-reply', { id: message.id }); continue; }
       tracked.delete(key);
     }
-    await toChild(line);
+    // Keep reading heartbeats even when Grok stops reading stdin. The writer chain
+    // is intentionally unbounded and preserves order, including synthetic replies.
+    void toChild(line).catch(fail);
   }
   if (!childExited) await finish(0, true);
 })().catch(fail);
