@@ -1,16 +1,17 @@
 name: Release
 
-# A published GitHub Release tagged vX.Y.Z publishes that version to npm
-# and attaches the package file to the release.
+# Pushing a tag vX.Y.Z publishes that version to npm, then creates the
+# GitHub Release with the package file attached. `npm run release` does
+# the bump, commit, tag, and push.
 # npm trusts this workflow file (trusted publishing): no npm token is
 # stored, and npm adds a provenance record.
 
 on:
-  release:
-    types: [published]
+  push:
+    tags: ['v*']
 
 permissions:
-  contents: write # attach the package file to the release
+  contents: write # create the release and attach the package file
   id-token: write # npm trusted publishing and provenance
 
 jobs:
@@ -45,8 +46,8 @@ jobs:
       - run: npm publish "$FILE"
         env:
           FILE: ${{ steps.pack.outputs.file }}
-      - name: Attach the package file to the release
-        run: gh release upload "$GITHUB_REF_NAME" "$FILE" --clobber
+      - name: Create the GitHub Release with the package file
+        run: gh release create "$GITHUB_REF_NAME" "$FILE" --title "pi-grok-agent ${GITHUB_REF_NAME#v}" --generate-notes
         env:
           FILE: ${{ steps.pack.outputs.file }}
           GH_TOKEN: ${{ github.token }}
