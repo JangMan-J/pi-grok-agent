@@ -20,6 +20,7 @@
 //   FAKE_GROK_LOAD_ERROR=1     session/load returns "session not found"
 //   FAKE_GROK_AUTH_FAIL=1      authenticate returns an error
 //   FAKE_GROK_HOLD_PROMPT=1    leave session/prompt unanswered until session/cancel
+//   FAKE_GROK_FINISH_ON_DENY=1 finish a held prompt normally after a synthetic deny/cancel
 //   FAKE_GROK_IGNORE_CANCEL=1  ignore session/cancel
 //   FAKE_GROK_IGNORE_EOF=1     do not exit when stdin closes
 //   FAKE_GROK_IGNORE_TERM=1    ignore SIGTERM
@@ -87,6 +88,14 @@ if (args.includes('leader')) {
     try { message = JSON.parse(line); } catch { return; }
     if (message.id != null && ('result' in message || 'error' in message)) {
       if (!(process.env.FAKE_GROK_LOG_BYTES === '1' && line.length > 4096)) record(line);
+      if (process.env.FAKE_GROK_FINISH_ON_DENY === '1' &&
+        (message.result?.decision === 'deny' || message.result?.outcome?.outcome === 'cancelled')) {
+        // Model the native harness continuing after denial, then completing its prompt.
+        setTimeout(() => {
+          send({ jsonrpc: '2.0', method: 'session/update', params: { sessionId: 'fake-session', update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'continued after denial' } } } });
+          for (const held of heldPrompts.splice(0)) send({ jsonrpc: '2.0', id: held.id, result: { stopReason: 'end_turn' } });
+        }, 25);
+      }
       const waiter = waiters.get(JSON.stringify(message.id));
       if (waiter) { waiters.delete(JSON.stringify(message.id)); waiter(message); return; }
       return;

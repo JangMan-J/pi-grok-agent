@@ -42,13 +42,15 @@ export interface SessionHandlers {
   onUpdate(notification: SessionNotification): void;
   /** Answer one MCP JSON-RPC message from Grok. Return the JSON-RPC `result` or throw for an error. */
   onMcp(message: SdkCall): Promise<unknown>;
-  onPermission?(request: RequestPermissionRequest, extend: () => void): Promise<RequestPermissionResponse>;
+  onPermission?(request: RequestPermissionRequest, extend: () => void, signal: AbortSignal): Promise<RequestPermissionResponse>;
+  /** Display-only notice, emitted only while this session has a running prompt. */
+  onNotice?(message: string): void;
   /** Blocking client hook. `gate.dialog()` extends the leash deadline for a human answer. */
-  onHookRun?(payload: any, gate?: { dialog(): void }): Promise<Record<string, unknown>>;
+  onHookRun?(payload: any, gate?: { dialog(): void; signal?: AbortSignal }): Promise<Record<string, unknown>>;
   /** Passive client hook notification (`_x.ai/hooks/event`). */
   onHookEvent?(payload: any): void;
   /** Grok's ask_user_question (`_x.ai/ask_user_question`). Default: cancelled. */
-  onQuestion?(request: any, extend: () => void): Promise<Record<string, unknown>>;
+  onQuestion?(request: any, extend: () => void, signal: AbortSignal): Promise<Record<string, unknown>>;
   /** Grok's extension session notifications (`_x.ai/session_notification`): turn_completed carries full token usage. */
   onSessionExt?(update: any): void;
 }
@@ -335,6 +337,11 @@ export class GrokModelConnection {
         Writable.toWeb(child.stdin) as unknown as WritableStream<Uint8Array>,
         Readable.toWeb(filtered) as unknown as ReadableStream<Uint8Array>,
       );
+      // Register before SDK dispatch so even a deadline in the same stdout batch can
+      // cancel the request before its handler opens UI. IDs retain string/number identity.
+      const tracked = new Map<unknown, { signal: AbortSignal; cancelled: Promise<void>; cancel(): void; expired: boolean; owner?: SessionHandlers }>();
+      void childEnd.then(() => { for (const request of tracked.values()) request.cancel(); });
+      const writer = stream.writable.getWriter();
       const intercepted = {
         readable: stream.readable.pipeThrough(new TransformStream<AnyMessage, AnyMessage>({
           transform: (message, controller) => {
@@ -346,27 +353,60 @@ export class GrokModelConnection {
               if (this.leashEvents.length > 5) this.leashEvents.shift();
               if (p.event === 'late-reply') this.lateReplies++;
               if (p.event === 'child-exit') grokExit = { code: p.code, signal: p.signal };
-              if (p.event === 'stall' || p.event === 'deadline') {
-                leashFailure = p.event === 'stall' ? leashStallMessage(p.ms) : leashDeadlineMessage(p.method, p.id, p.ms);
+              if (p.event === 'deadline') {
+                const request = tracked.get(p.id);
+                if (!request?.expired) {
+                  const notice = leashDeadlineMessage(p.method, p.id, p.ms);
+                  if (request?.owner) request.owner.onNotice?.(notice);
+                  else for (const owner of this.sessions.values()) owner.onNotice?.(notice);
+                  request?.cancel();
+                }
+              }
+              if (p.event === 'stall') {
+                leashFailure = leashStallMessage(p.ms);
                 finishEnd(leashFailure);
                 fail(leashFailure);
               }
               return;
             }
+            if ('method' in message && 'id' in message && ['_x.ai/hooks/run', 'session/request_permission', '_x.ai/ask_user_question'].includes(message.method)) {
+              const abort = new AbortController();
+              let cancel!: () => void;
+              const cancelled = new Promise<void>((resolve) => { cancel = resolve; });
+              const params = message.params as any;
+              const request = { signal: abort.signal, cancelled, expired: false, owner: this.sessions.get(params?.sessionId ?? params?.session_id),
+                cancel() { if (request.expired) return; request.expired = true; abort.abort(); cancel(); },
+              };
+              tracked.set(message.id, request);
+            }
             controller.enqueue(message);
           },
         })),
-        writable: stream.writable,
+        writable: new WritableStream<AnyMessage>({
+          write: async (message) => {
+            const response = 'id' in message && !('method' in message);
+            const request = response ? tracked.get(message.id) : undefined;
+            // The leash already answered. Settle the SDK handler but never serialize its
+            // cancellation result (or a result queued just before the deadline) to stdin.
+            if (!request?.expired) await writer.write(message);
+            if (response) tracked.delete(message.id);
+          },
+        }),
       };
       // SDK 1.5 exposes the raw id as ctx.requestId. Use that instead of identity/FIFO
       // interception, preserving the SDK's permission schema validation and response writer.
-      const dialogExtension = (id: unknown) => {
+      const answerTracked = <T>(id: unknown, fallback: T, answer: (extend: () => void, signal: AbortSignal) => Promise<T>): Promise<T> => {
+        const request = tracked.get(id)!;
         let extended = false;
-        return () => {
-          if (!guarded || extended) return;
+        const extend = () => {
+          if (!guarded || extended || request.expired) return;
           extended = true;
           writeLine({ jsonrpc: '2.0', method: 'pi/extend', params: { id, ms: this.guardSettings.dialogMs } });
         };
+        if (request.expired) return Promise.resolve(fallback);
+        // A handler need not cooperate with abort: the SDK lifetime still settles now,
+        // and Promise.race consumes any eventual answer/rejection without writing it.
+        return Promise.race([Promise.resolve().then(() => request.expired ? fallback : answer(extend, request.signal)), request.cancelled.then(() => fallback)]);
       };
       let readyTimer: ReturnType<typeof setTimeout> | undefined;
       try {
@@ -376,13 +416,16 @@ export class GrokModelConnection {
           })
           .onRequest('session/request_permission', async ({ params, requestId }) => {
             const owned = this.sessions.get(params.sessionId);
-            return owned?.onPermission ? owned.onPermission(params, dialogExtension(requestId)) : { outcome: { outcome: 'cancelled' as const } };
+            return answerTracked<RequestPermissionResponse>(requestId, { outcome: { outcome: 'cancelled' } }, (extend, signal) =>
+              owned?.onPermission ? owned.onPermission(params, extend, signal) : Promise.resolve({ outcome: { outcome: 'cancelled' } }));
           })
           .onRequest('_x.ai/ask_user_question', (raw) => raw as any, async ({ params, requestId }) => {
             const owned = this.sessions.get(params?.sessionId ?? params?.session_id);
-            return owned?.onQuestion ? owned.onQuestion(params, dialogExtension(requestId)) : { outcome: 'cancelled' };
+            return answerTracked<Record<string, unknown>>(requestId, { outcome: 'cancelled' }, (extend, signal) =>
+              owned?.onQuestion ? owned.onQuestion(params, extend, signal) : Promise.resolve({ outcome: 'cancelled' }));
           })
-          .onRequest('_x.ai/hooks/run', (raw) => raw as any, ({ params, requestId }) => this.answerHook(params, dialogExtension(requestId)))
+          .onRequest('_x.ai/hooks/run', (raw) => raw as any, ({ params, requestId }) =>
+            answerTracked<Record<string, unknown>>(requestId, { decision: 'deny' }, (extend, signal) => this.answerHook(params, extend, signal)))
           .onNotification('_x.ai/session_notification', (raw) => raw as any, ({ params }) => {
             this.sessions.get(params.sessionId ?? params.session_id)?.onSessionExt?.(params.update);
           })
@@ -445,7 +488,7 @@ export class GrokModelConnection {
     return this.opening;
   }
 
-  private async answerHook(params: any, extend: () => void): Promise<Record<string, unknown>> {
+  private async answerHook(params: any, extend: () => void, signal: AbortSignal): Promise<Record<string, unknown>> {
     const id = params?.sessionId ?? params?.session_id;
     const owned = id ? this.sessions.get(id) : undefined;
     try {
@@ -456,7 +499,7 @@ export class GrokModelConnection {
         if (params.hookEventName === 'pre_tool_use') return { decision: 'deny', reason: `Pi detached from this Grok session; tool use is denied until a Pi session owns it again. ${UNKNOWN_SESSION}` };
         return { decision: 'continue' };
       }
-      return await owned.onHookRun(params, { dialog: extend });
+      return await owned.onHookRun(params, { dialog: extend, signal });
     } catch (error) {
       return { decision: 'deny', reason: `Malformed hook payload: ${error instanceof Error ? error.message : String(error)}` };
     }

@@ -74,7 +74,7 @@ export function leashStartMessage(path: string, detail: string, stderr = ''): st
 }
 
 export function isExplained(message: string): boolean {
-  return /^(Cannot start Grok|Grok at |Grok child |Grok Build is not signed in|Grok did not answer |Grok did not acknowledge |Grok connection cancelled|Cannot start pi-grok-leash|\[grok stopped by pi-grok-leash:|\[pi-grok-leash denied )/.test(message);
+  return /^(Cannot start Grok|Grok at |Grok child |Grok Build is not signed in|Grok did not answer |Grok did not acknowledge |Grok connection cancelled|Cannot start pi-grok-leash|\[grok stopped by pi-grok-leash:)/.test(message);
 }
 
 export function missingSessionNote(sessionId: string): string {

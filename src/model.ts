@@ -128,7 +128,7 @@ export default async function grokModel(pi: ExtensionAPI) {
     session.mediaDir = config.mediaDir;
     session.grokMode = config.grokMode;
     session.permissionMode = permissionMode;
-    session.askDialog = ctx.hasUI ? async (tool, input) => (await ctx.ui.confirm(`Grok wants to run ${tool}`, JSON.stringify(input ?? {}, null, 2).slice(0, 2000))) === true : undefined;
+    session.askDialog = ctx.hasUI ? async (tool, input, signal) => (await ctx.ui.confirm(`Grok wants to run ${tool}`, JSON.stringify(input ?? {}, null, 2).slice(0, 2000), { signal })) === true : undefined;
     // Routine completions batch into one `grok-tools` row per few calls; failures, denials,
     // media, and post-edit notes keep their own `grok-tool` rows. Leftovers flush at turn end.
     session.onToolRecord = (record) => {

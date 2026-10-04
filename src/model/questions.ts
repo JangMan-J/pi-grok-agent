@@ -17,12 +17,12 @@ const CHAT = 'Chat about this';
 const SKIP = 'Skip interview and plan immediately';
 const DONE = 'Done selecting';
 
-export type Answerer = (request: AskUserQuestionRequest, extend?: () => void) => Promise<AskUserQuestionResponse>;
+export type Answerer = (request: AskUserQuestionRequest, extend?: () => void, signal?: AbortSignal) => Promise<AskUserQuestionResponse>;
 
 /** Interactive: one Pi dialog per question. Headless: cancelled, which Grok's tool reports to the model as unanswered. */
 export function questionAnswerer(ctx: Pick<ExtensionContext, 'hasUI' | 'ui'>): Answerer {
-  return async (request, extend) => {
-    if (!ctx.hasUI) return { outcome: 'cancelled' };
+  return async (request, extend, signal) => {
+    if (!ctx.hasUI || signal?.aborted) return { outcome: 'cancelled' };
     const answers: Record<string, string[]> = {};
     const annotations: Record<string, { preview?: string; notes?: string }> = {};
     const partial = () => Object.fromEntries(Object.entries(answers).map(([q, a]) => [q, a[0] ?? OTHER]));
@@ -36,13 +36,13 @@ export function questionAnswerer(ctx: Pick<ExtensionContext, 'hasUI' | 'ui'>): A
       for (;;) {
         const menu = multi ? [...labels.filter((l) => !picked.includes(byLabel.get(l)!)), ...(picked.length ? [DONE] : []), ...extras] : [...labels, ...extras];
         extend?.(); // the connection makes this idempotent across a multi-question interview
-        const choice = await ctx.ui.select(picked.length ? `${title} (selected: ${picked.map((p) => p.label).join(', ')})` : title, menu);
+        const choice = await ctx.ui.select(picked.length ? `${title} (selected: ${picked.map((p) => p.label).join(', ')})` : title, menu, { signal });
         if (choice === undefined) return { outcome: 'cancelled' };
         if (choice === CHAT) return { outcome: 'chat_about_this', partial_answers: partial() };
         if (choice === SKIP) return { outcome: 'skip_interview', partial_answers: partial() };
         if (choice === DONE) break;
         if (choice === OTHER) {
-          const notes = await ctx.ui.input('Your answer', 'Type a reply for Grok');
+          const notes = await ctx.ui.input('Your answer', 'Type a reply for Grok', { signal });
           if (notes === undefined) return { outcome: 'cancelled' };
           answers[q.question] = [OTHER];
           annotations[q.question] = { notes };
