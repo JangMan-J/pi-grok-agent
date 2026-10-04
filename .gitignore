@@ -4,4 +4,7 @@ node_modules/
 .pi/grok-images/
 package-lock.json
 dist/
+bin/
+leash/target/
 HANDOFF-*.md
+.pi-herdsman/

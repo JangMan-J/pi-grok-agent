@@ -6,6 +6,7 @@ import type { SessionNotification, PromptResponse, RequestPermissionRequest, Req
 import type { Tool, ToolResultMessage } from '@earendil-works/pi-ai';
 import type { GrokModelConnection, McpToolDefinition, SdkCall } from './connection.ts';
 import { descriptionForPiTool, PI_MCP_SERVER_NAME, type PiToolAttribution, type PiToolRoute } from '../tool-policy.ts';
+import { cancelTimeoutMessage, missingSessionNote } from './child-report.ts';
 import { capabilityGate, postEditContext, stopGate, classify, mcpServerOf, type GrokToolStamp, type HookRun, type HookReply } from './hooks.ts';
 import type { HookSettings, PiPermissionMode } from '../config.ts';
 import { copyFileSync, existsSync, mkdirSync, writeFileSync } from 'node:fs';
@@ -71,9 +72,9 @@ export class GrokModelSession {
   readonly piSessionId: string;
   readonly cwd: string;
   /** Grok's native permission prompts (file edits, shell) go here; default denies. */
-  permission: (request: RequestPermissionRequest) => Promise<RequestPermissionResponse> = async () => ({ outcome: { outcome: 'cancelled' } });
+  permission: (request: RequestPermissionRequest, extend?: () => void, signal?: AbortSignal) => Promise<RequestPermissionResponse> = async () => ({ outcome: { outcome: 'cancelled' } });
   /** Grok's ask_user_question; default cancelled (the model is told the user did not answer). */
-  ask: (request: any) => Promise<Record<string, unknown>> = async () => ({ outcome: 'cancelled' });
+  ask: (request: any, extend?: () => void, signal?: AbortSignal) => Promise<Record<string, unknown>> = async () => ({ outcome: 'cancelled' });
   /** Pi tool names present in the Pi session; the pre_tool_use gate mirrors them onto Grok's harness. */
   piToolNames: string[] = [];
   /** Runtime source/namespace metadata for Pi tools, when Pi exposes it before transcript serialization. */
@@ -92,7 +93,7 @@ export class GrokModelSession {
    */
   permissionMode: PiPermissionMode = 'auto';
   /** Dialog used by `ask` mode; set by the extension when Pi has a UI. */
-  askDialog?: (tool: string, input: unknown) => Promise<boolean>;
+  askDialog?: (tool: string, input: unknown, signal?: AbortSignal) => Promise<boolean>;
   /** Directory for project copies of Grok media (relative to cwd, or absolute). Empty disables copying. */
   mediaDir = '.pi/grok-images';
   /** Hook decisions this session made, for evidence and tests. */
@@ -132,6 +133,7 @@ export class GrokModelSession {
     this.piSessionId = piSessionId;
     this.cwd = cwd;
     this.serverId = serverId ?? `pi-${piSessionId}`;
+    this.connection.onDrop?.((reason) => this.rejectParked(reason));
   }
 
   get promptActive() { return !!this.activePrompt; }
@@ -139,6 +141,16 @@ export class GrokModelSession {
 
   /** Set when a turn had to reconnect; the provider surfaces it once. */
   reconnected?: string;
+  /** One-time stream note: a missing session, or a stored id from another cwd. */
+  notice?: string;
+
+  /** The note for this turn, if any. Cleared so it is shown once. */
+  takeNote(): string | undefined {
+    const note = this.notice ?? (this.reconnected ? `[grok reconnected after: ${this.reconnected}; session ${this.grokSessionId} reloaded]` : undefined);
+    this.notice = undefined;
+    this.reconnected = undefined;
+    return note ? (note.endsWith('\n') ? note : `${note}\n`) : undefined;
+  }
   /** Connection generation this session was attached under; a newer generation means the socket dropped since. */
   private attachedGeneration = -1;
   /** True once a Grok turn attached this session in this Pi process (a restored session ID alone does not count). */
@@ -148,17 +160,25 @@ export class GrokModelSession {
     if (!this.connection.isOpen) await this.connection.open();
     if (this.grokSessionId && this.attachedGeneration === this.connection.generation) return;
     if (this.grokSessionId && this.attachedGeneration >= 0) {
-      // Socket dropped since the last attach (for example a gateway restart). session/load the same Grok session; history lives on the leader.
+      // Child dropped since the last attach. The next attach session/loads the stored id.
       if (this.activePrompt) { this.activePrompt = undefined; this.rejectParked('Grok connection dropped; the turn was lost.'); }
       this.reconnected = this.connection.lastDrop ?? 'reconnected';
     }
-    const { sessionId, response } = await this.connection.attachSession({
+    // A drop can occur after the reply but before this await resumes. Remember the
+    // generation that actually received the attach, never a newly spawned child's generation.
+    const generation = this.connection.generation;
+    const attached = await this.connection.attachSession({
       sessionId: this.grokSessionId, cwd: this.cwd, serverId: this.serverId, serverName: PI_MCP_SERVER_NAME, rules,
       offerPiTools: this.tools.length > 0, grokMode: this.grokMode,
-      handlers: { onUpdate: (n) => this.onUpdate(n), onMcp: (m) => this.onMcp(m), onPermission: (r) => this.permission(r), onHookRun: (p, gate) => this.onHookRun(p, gate), onHookEvent: (p) => { void this.onHookRun(p); }, onQuestion: (q) => this.ask(q), onSessionExt: (u) => this.onSessionExt(u) },
+      handlers: { onUpdate: (n) => this.onUpdate(n), onMcp: (m) => this.onMcp(m), onPermission: (r, extend, signal) => this.permission(r, extend, signal), onHookRun: (p, gate) => this.onHookRun(p, gate), onHookEvent: (p) => { void this.onHookRun(p); }, onQuestion: (q, extend, signal) => this.ask(q, extend, signal), onSessionExt: (u) => this.onSessionExt(u), onNotice: (message) => { if (this.promptActive) this.emit({ kind: 'thought', delta: `${message}\n` }); } },
     });
+    const { sessionId, response } = attached;
+    if (attached.replacedSessionId) {
+      this.reconnected = undefined;
+      this.notice = missingSessionNote(attached.replacedSessionId);
+    }
     this.grokSessionId = sessionId;
-    this.attachedGeneration = this.connection.generation;
+    this.attachedGeneration = generation;
     // Grok reports the session's model and the models this account may use as the `model` config option.
     const modelOption = ((response as { configOptions?: { id?: string; currentValue?: string; options?: { value?: string }[] }[] }).configOptions ?? []).find((o) => o.id === 'model');
     if (modelOption) {
@@ -244,8 +264,21 @@ export class GrokModelSession {
   }
 
   async cancel() {
-    if (!this.grokSessionId || !this.activePrompt) return;
-    await this.connection.agent.notify('session/cancel', { sessionId: this.grokSessionId }).catch(() => {});
+    const pending = this.activePrompt;
+    const sessionId = this.grokSessionId;
+    if (!pending || !sessionId) return;
+    await this.connection.agent.notify('session/cancel', { sessionId }).catch(() => {});
+    const ackMs = this.connection.cancelAckMs ?? 5000;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const acked = await Promise.race([
+      pending.then(() => true, () => true),
+      new Promise<boolean>((resolve) => { timer = setTimeout(() => resolve(false), ackMs); timer.unref?.(); }),
+    ]);
+    if (timer) clearTimeout(timer);
+    // Escape already ended the Pi turn. If Grok never settles the prompt, kill the child so the next turn can respawn.
+    if (!acked && this.connection.isOpen && typeof this.connection.drop === 'function') {
+      this.connection.drop(cancelTimeoutMessage(ackMs));
+    }
   }
 
   /** Grok's current session mode as last reported by `current_mode_update` (or set by us). */
@@ -375,7 +408,12 @@ export class GrokModelSession {
   }
 
   /** Blocking client hooks: gate native tools by Pi capability, annotate edits, and hold the stop. */
-  async onHookRun(payload: HookRun, gate?: { dialog(): void }): Promise<HookReply> {
+  async onHookRun(payload: HookRun, gate?: { dialog(): void; signal?: AbortSignal }): Promise<HookReply> {
+    if (!payload || typeof payload !== 'object' || typeof payload.hookEventName !== 'string' || !payload.hookEventName) {
+      const reason = 'Malformed hook payload: missing hookEventName.';
+      this.logHook({ event: 'malformed', decision: 'deny', reason });
+      return { decision: 'deny', reason };
+    }
     try {
       switch (payload.hookEventName) {
         case 'pre_tool_use': {
@@ -388,9 +426,9 @@ export class GrokModelSession {
           const kind = classify(tool, stamp);
           const needsDialog = this.permissionMode === 'ask' && kind !== 'read' && kind !== 'other';
           if (verdict.allow && needsDialog && this.askDialog) {
-            gate?.dialog(); // a human is deciding: the gateway waits the dialog window, not the policy window
-            const ok = await this.askDialog(tool, payload.toolInput);
-            if (!ok) verdict = { allow: false, reason: `The user declined ${tool}.` };
+            gate?.dialog(); // a human is deciding: extend the leash's request deadline
+            const ok = await this.askDialog(tool, payload.toolInput, gate?.signal);
+            if (!ok) verdict = { allow: false, reason: gate?.signal?.aborted ? 'Pi dialog cancelled before an answer.' : `The user declined ${tool}.` };
           }
           const reply: HookReply = verdict.allow ? { decision: 'continue' } : { decision: 'deny', reason: verdict.reason };
           this.toolCallsSeen++;

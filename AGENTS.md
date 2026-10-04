@@ -8,17 +8,17 @@ Human setup and the settings reference are in `README.md`. Design notes are in `
 
 Scripts are in `package.json`. Run `npm install` once before any check. The `pi` manifest loads `./src/model.ts`.
 
+- `npm run build:leash`: build the Rust crate and copy the release executable to ignored `bin/pi-grok-leash`. Requires Rust stable (verified with rustc 1.99.0); no `rust-toolchain.toml` is present.
 - `npm run check`: type check (`tsc --noEmit`).
-- `npm test`: unit tests in `test/`, with mocks only, plus `test/gateway.test.ts`, which runs the real gateway against `test/fixtures/fake-grok.ts` in a scratch `HOME`. Nothing contacts Grok.
-- `npm run server`: the gateway plus a dedicated Grok leader, on `127.0.0.1:2419` by default. The package `bin` `pi-grok-gateway` is the same script compiled to `dist/scripts/server.js` (`npm run build`, run by `prepack`; `dist/` is gitignored), because Node does not strip TypeScript types under `node_modules`. It runs from any working directory. The extension also starts it on the first Grok turn when nothing listens (`src/launch.ts`); tests that load `src/model.ts` must set `PI_GROK_AUTOSTART=0` so they never start a real gateway.
+- `npm test`: unit tests plus fake-child transport and leash integration. With the built binary on Linux, `test/leash-process.test.ts` exercises Pi SIGKILL, Pi SIGSTOP with a hook pending/while idle, and simulated suspend (~30 s). Nothing contacts Grok.
+- `npm run test:leash-real`: run `test/leash.test.ts` with the Rust `bin/pi-grok-leash` and fake Grok; skips when the binary is absent.
+- `cargo test` in `leash/`: Rust unit and process tests with a fake child.
 - `npm pack --dry-run`: the `files` list in `package.json` decides the tarball. Keep `evidence/`, `test/`, and the probe scripts out of it.
-- `npm run test:live` and the scripts in `scripts/`: live probes. They use the current Grok login and spend model usage. Run them only when the user asks. They write to `evidence/`. Create that directory first. It is in `.gitignore`: results stay local and are never committed. The one tracked file there, `evidence/pi-grok-agent-demo-finalv.mp4`, is the `pi.video` URL that published versions point to; keep it until a release points elsewhere. `scripts/reconnect-probe.ts` hardcodes port 2419 and `~/.pi/agent/grok-ws.pid` and stops that gateway, so it never runs isolated.
+- Live probes use the current Grok login and spend usage: run only when the user asks. `scripts/model-probe.ts` and `scripts/reconnect-probe.ts` passed on `7c26faa` (Grok 1.0.46, Pi 1.0.2, Node 26.10); see `docs/launch-verification.md`. Obsolete gateway probes exit 2. `npm run test:live` runs the two adapted probes. Results go to ignored `evidence/`; keep the tracked demo video until a release points elsewhere.
 
-## Gateway ownership
+## Child ownership
 
-The gateway binds its port before it starts or adopts a leader (`scripts/server.ts`, bottom). A launch that loses its port exits with `EADDRINUSE` and has touched no leader. A leader the launch spawns, or adopts once it holds the port, is its own: shutdown stops it. Keep that order. `test/gateway.test.ts` checks it with `test/fixtures/fake-grok.ts` as the Grok binary.
-
-For an isolated gateway, set all three: `PI_GROK_LEADER_SOCKET` to a new socket path, `GROK_ACP_URL` to a free port, and `PI_CODING_AGENT_DIR` to a scratch directory. The extension reads its secret at load time (`readConfig` in `src/config.ts`). Start the gateway once before Pi loads the extension, or set `GROK_AGENT_SECRET`.
+`src/model/connection.ts` starts one non-detached `pi-grok-leash` per Pi process; `leash/src/runtime.rs` spawns `grok --permission-mode default agent --no-leader stdio` in a new process group. No leader, daemon, fixed ACP port, or secret file. `drop()` and `close()` close the leash's stdin so it kills and reaps Grok's group, with signal escalation if the leash does not exit. Linux parent-death signals protect leash and immediate Grok on abrupt Pi death, but do not themselves kill Grok's whole group. `PI_GROK_BINARY` and `PI_CODING_AGENT_DIR` are inherited at spawn time. Loading the extension must not spawn Grok. Child env forces `GROK_DISABLE_AUTOUPDATER=1`. Lent tools use MCP-over-ACP on that pipe (`x.ai/mcp/sdk`, `x.ai/mcp/servers`, `_x.ai/mcp/sdk_call`).
 
 ## Architecture
 
@@ -26,26 +26,27 @@ For an isolated gateway, set all three: `PI_GROK_LEADER_SOCKET` to a new socket 
 | --- | --- |
 | `src/model.ts` | Extension entry: provider registration, renderers, `/grok` command, media display, steer wiring |
 | `src/model/provider.ts` | Pi transcript to ACP prompt. System prompt goes as `_meta.rules`. Only the new tail is sent. Model IDs. |
-| `src/model/connection.ts` | One WebSocket per Pi process, `session/new` or `session/load`, `cached_token` auth |
+| `src/model/connection.ts` | One stdio leash per Pi process, ready handshake, heartbeat/dialog extensions, leash events, `session/new` or `session/load`, `cached_token` auth. `guardedRequest` retains Pi-to-Grok request deadlines (`test/hardening.test.ts`); old `guard.ts` is removed. |
+| `leash/` → `bin/pi-grok-leash` | Rust stable crate and built executable. `runtime.rs` owns process lifetime/forwarding; `tracker.rs` owns the three tracked reverse-request deadlines, synthetic deny/cancel, late-reply drops, and suspend re-baselining. |
 | `src/model/session.ts` | ACP updates to Pi events, client hooks, media copy, lent-tool parking. `startPrompt` owns the prompt lifetime for normal turns and `/grok` commands: busy state, cancel, late-completion suppression |
 | `src/model/hooks.ts` | `capabilityGate`, `postEditContext`, `stopGate` |
 | `src/model/permissions.ts`, `questions.ts` | Grok permission prompts and `ask_user_question` as Pi dialogs |
 | `src/model/steer.ts` | Mid-turn Enter to `_x.ai/interject` |
-| `src/config.ts` | `~/.pi/agent/grok-ws.json`, environment overrides, guard validation. A missing secret file is not a load error: Pi exits on any extension load failure |
+| `src/config.ts` | `~/.pi/agent/grok-ws.json`, environment overrides, leash stall/request/dialog deadline validation |
 | `src/login.ts` | `/grok login`: runs `grok login --device-auth`, parses the URL and code. Grok stores the credential; Pi stores nothing. A signed-out Grok offers no `cached_token` method, and `connection.ts` then drops the connection with a pointer to `/grok login` |
-| `src/launch.ts` | Gateway auto-start: when nothing listens on the loopback endpoint, spawn this install's gateway detached (`dist/` under `node_modules`, else `scripts/server.ts`) and wait for its port |
-| `scripts/server.ts` | Gateway: leader supervision, stdio bridge per socket, bearer auth, MCP relay at `/mcp/<token>`, `ReverseRequestGuard` (one guarded lifetime per hook, permission prompt, or question: ack tiers, one answer per request, fail closed on disconnect) |
+
 
 Invariants:
 
 - Grok native tool calls stay on Grok. They become `grok-tools` batch rows or `grok-tool` entries, never thinking text or Pi tool calls (`test/model.test.ts`). Rows keep call order (`test/extension.test.ts`).
 - Custom entries and `grok-media` messages are display only. The provider never sends them to Grok.
 - Grok's model context keeps full tool results. Pi's copies are shortened: 8000 characters in a `grok-tool` entry, 600 in the expanded renderer. Native tool activity stays out of the thinking stream.
-- The gateway starts Grok in default permission mode. Keep `--always-approve` out of `LEADER_ARGS`.
+- The extension never spawns the Grok agent directly except under `PI_GROK_LEASH=none` (the separate `/grok login` flow still invokes the CLI). The child uses default permission mode. Never pass `--always-approve`.
+- The leash kills Grok's process group when Pi stops heartbeating and denies/cancels unanswered tracked requests; it never grants permission. A deadline shows one notice and keeps the child/turn running (`d4e5891`, `test/leash.test.ts`); a stall ends the turn. `PI_GROK_LEASH=none` explicitly opts out and debug says `UNGUARDED`. Short stalls, escaped descendants, abrupt parent-death group limits, and suspend behavior are documented in `docs/first-class-model.md`. Live Grok-with-leash probes have not been run.
 - `zod` stays in `dependencies` although nothing imports it: `@agentclientprotocol/sdk` lists it as a peer, Pi installs with `--legacy-peer-deps`, and the extension failed with `Cannot find module 'zod/v4'` without it (`docs/launch-verification.md`, G2).
 
 ## Documentation claims
 
 Every capability claim in `README.md` or `docs/` must point to source, a unit test, or a probe result that exists. Mark a claim as unverified when its evidence file is absent. Record the Grok, Pi, and Node versions with each live result. Tracked files use repository-relative or `~/` paths only.
 
-The license is Apache-2.0 (`LICENSE`, `license` in `package.json`). Published on npm as `pi-grok-agent` (0.1.0 on 2026-09-28). `.github/workflows/ci.yml` runs `npm run check` and `npm test` on Node 22, 24, and 26 for every push to `main` and every pull request. To release: bump `version` in `package.json`, push, then publish a GitHub Release tagged `v<version>`. `.github/workflows/release.yml` checks the tag against `package.json`, runs the checks, publishes to npm through trusted publishing (no npm token, with provenance), and attaches the same tarball to the release. Manual `npm publish` still works and needs the owner's npm login and security key. Check `npm pack --dry-run` before a release: the `files` list decides the tarball.
+The license is Apache-2.0 (`LICENSE`, `license` in `package.json`). Published on npm as `pi-grok-agent` (0.1.0 on 2026-09-28). `.github/workflows/ci.yml` keeps `npm run check` and `npm test` on Node 22, 24, and 26 for every push to `main` and every pull request. Its Linux leash job installs Rust stable, caches Cargo, runs `cargo test`, `npm install` (no tracked npm lockfile), `npm run build:leash`, `npm run check`, `npm test`, and `npm run test:leash-real`. To release: bump `version` in `package.json`, push, then publish a GitHub Release tagged `v<version>`. `.github/workflows/release.yml` checks the tag against `package.json`, installs Rust stable and builds the linux-x64 leash before checks/packing, publishes to npm through trusted publishing (no npm token, with provenance), and attaches the same tarball to the release. Only linux-x64 is shipped; other Unix platforms build from the repository and remain unverified (Windows is unsupported by the Unix crate). The `files` field includes `bin` but excludes `leash/`, tests, evidence, and scripts; keep `bin/` and `leash/target/` gitignored. Manual `npm publish` still works and needs the owner's npm login and security key. Check `npm pack --dry-run` before a release: the `files` list decides the tarball.

@@ -4,15 +4,16 @@ import type { RequestPermissionRequest, RequestPermissionResponse } from '@agent
 import type { ExtensionContext } from '@earendil-works/pi-coding-agent';
 import type { HeadlessPermissionPolicy } from '../config.ts';
 
-type Answer = (request: RequestPermissionRequest) => Promise<RequestPermissionResponse>;
+type Answer = (request: RequestPermissionRequest, extend?: () => void, signal?: AbortSignal) => Promise<RequestPermissionResponse>;
 
 /** Interactive: Grok's permission prompt as a Pi selection dialog. Dismissal cancels; Grok treats that as a rejection. */
 export function permissionDialog(ctx: Pick<ExtensionContext, 'hasUI' | 'ui'>): Answer {
-  return async (request) => {
-    if (!ctx.hasUI) return { outcome: { outcome: 'cancelled' } };
+  return async (request, extend, signal) => {
+    if (!ctx.hasUI || signal?.aborted) return { outcome: { outcome: 'cancelled' } };
     const labels = request.options.map((option, i) => `${i + 1}. ${option.name} (${option.kind})`);
     const details = JSON.stringify(request.toolCall.rawInput ?? {}, null, 2).slice(0, 4000);
-    const selected = await ctx.ui.select(`Grok: ${request.toolCall.title}\n${details}`, labels);
+    extend?.();
+    const selected = await ctx.ui.select(`Grok: ${request.toolCall.title}\n${details}`, labels, { signal });
     const index = selected === undefined ? -1 : labels.indexOf(selected);
     if (index < 0) return { outcome: { outcome: 'cancelled' } };
     return { outcome: { outcome: 'selected', optionId: request.options[index].optionId } };
@@ -44,5 +45,5 @@ export function headlessPermission(policy: HeadlessPermissionPolicy): Answer {
 export function permissionAnswer(hasUI: boolean, dialog: Answer, policy: HeadlessPermissionPolicy, mode: () => 'yolo' | 'auto' | 'ask' | 'readonly' = () => 'auto'): Answer {
   const base = hasUI ? dialog : headlessPermission(policy);
   const allow = headlessPermission('allow');
-  return (request) => (mode() === 'yolo' ? allow(request) : base(request));
+  return (request, extend, signal) => (mode() === 'yolo' ? allow(request) : base(request, extend, signal));
 }

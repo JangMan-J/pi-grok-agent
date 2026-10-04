@@ -31,11 +31,12 @@ jobs:
             echo "Tag $GITHUB_REF_NAME, package.json $want" >&2
             exit 1
           fi
+      # ubuntu-latest is linux-x64; this release ships only that leash binary.
+      - uses: dtolnay/rust-toolchain@stable
       - run: npm install
+      - run: npm run build:leash
       - run: npm run check
       - run: npm test
-        env:
-          PI_GROK_AUTOSTART: '0'
       # Pack once, then publish and attach that same file,
       # so the release asset is byte for byte what npm has.
       - name: Pack

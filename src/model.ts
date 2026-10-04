@@ -1,4 +1,4 @@
-// Pi extension: registers the `grok` model provider backed by Grok Build over WebSocket ACP.
+// Pi extension: registers the `grok` model provider backed by a Grok Build stdio ACP child.
 import type { ExtensionAPI, ExtensionContext } from '@earendil-works/pi-coding-agent';
 import { Box, Container, Image, Spacer, Text, getCapabilities } from '@earendil-works/pi-tui';
 import { execFileSync } from 'node:child_process';
@@ -6,10 +6,11 @@ import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { extname, join } from 'node:path';
-import { agentDir, readConfig, writeConfig, type PiPermissionMode } from './config.ts';
+import { readConfig, writeConfig, type PiPermissionMode } from './config.ts';
 import { grokLogin } from './login.ts';
 import { permissionAnswer, permissionDialog } from './model/permissions.ts';
 import { questionAnswerer } from './model/questions.ts';
+import { storedSessionAction } from './model/child-report.ts';
 import { GrokModelConnection } from './model/connection.ts';
 import { GrokModelSession, type GrokToolRecord } from './model/session.ts';
 import { createGrokStream, GROK_API, MODEL_IDS } from './model/provider.ts';
@@ -77,7 +78,7 @@ export default async function grokModel(pi: ExtensionAPI) {
   // Live blocked Pi extension set: `/grok extensions` mutates this Set in place and persists it, so the
   // next Grok session lends the updated set without a Pi reload. (Grok reads the tool list once per session.)
   const blockedPiExtensions = new Set(config.blockedPiExtensions);
-  const connection = new GrokModelConnection({ url: config.url, secret: config.secret, secretFile: config.secretFile, autoStart: config.autoStartGateway ? { logDir: agentDir } : undefined });
+  const connection = new GrokModelConnection(config.guard);
   let current: GrokModelSession | undefined;
   // Pi-side permission mode, persisted as `permissionMode` in grok-ws.json so a chosen `/grok perms`
   // survives Pi restarts. Applied to every Grok session in configure().
@@ -112,7 +113,10 @@ export default async function grokModel(pi: ExtensionAPI) {
       if (entry.type === 'custom' && entry.customType === ENTRY && (entry.data as SavedModelSession)?.owner === owner) saved = entry.data as SavedModelSession;
     }
     current = configure(new GrokModelSession(connection, owner, ctx.cwd, saved?.serverId), ctx);
-    if (saved && saved.cwd === ctx.cwd) current.grokSessionId = saved.grokSessionId;
+    // 17-sessions.md stores each session under its cwd. A different cwd gets a new session.
+    const stored = storedSessionAction(saved, ctx.cwd);
+    if (stored.grokSessionId) current.grokSessionId = stored.grokSessionId;
+    if (stored.notice) current.notice = stored.notice;
   }
 
   /** Permission answers, hook settings, and the structured tool record sink. */
@@ -124,7 +128,7 @@ export default async function grokModel(pi: ExtensionAPI) {
     session.mediaDir = config.mediaDir;
     session.grokMode = config.grokMode;
     session.permissionMode = permissionMode;
-    session.askDialog = ctx.hasUI ? async (tool, input) => (await ctx.ui.confirm(`Grok wants to run ${tool}`, JSON.stringify(input ?? {}, null, 2).slice(0, 2000))) === true : undefined;
+    session.askDialog = ctx.hasUI ? async (tool, input, signal) => (await ctx.ui.confirm(`Grok wants to run ${tool}`, JSON.stringify(input ?? {}, null, 2).slice(0, 2000), { signal })) === true : undefined;
     // Routine completions batch into one `grok-tools` row per few calls; failures, denials,
     // media, and post-edit notes keep their own `grok-tool` rows. Leftovers flush at turn end.
     session.onToolRecord = (record) => {
@@ -154,7 +158,7 @@ export default async function grokModel(pi: ExtensionAPI) {
   const contextWindowFor = (id: string | undefined) => (id && contextWindows[id]) || DEFAULT_CONTEXT_WINDOW;
 
   pi.registerProvider('grok', {
-    baseUrl: config.url,
+    baseUrl: 'stdio://grok',
     apiKey: 'grok-build-login',
     api: GROK_API,
     models: MODEL_IDS.map((id) => ({
@@ -322,7 +326,8 @@ export default async function grokModel(pi: ExtensionAPI) {
             const blockedPiToolNames = blockedToolNamesForExtensions(blockedPiExtensions, piToolAttributions);
             const withheldPiTools = sortedNames(session.piToolNames.filter((toolName) => blockedPiToolNames.has(toolName)));
             show('Grok debug', [
-              `gateway: ${config.url} (${connection.isOpen ? 'connected' : 'not connected'}${connection.launchedGateway ? `, started by this Pi as pid ${connection.launchedGateway}` : ''}${connection.lastDrop ? `, last drop: ${connection.lastDrop}` : ''}; auto-start ${config.autoStartGateway ? 'on' : 'off'})`,
+              `stdio child: ${connection.binary} (${connection.isOpen ? 'connected' : 'not connected'}${connection.lastDrop ? `, last drop: ${connection.lastDrop}` : ''})`,
+              ...connection.debugLines(),
               `grok session: ${session.grokSessionId ?? '(none yet; first message creates it)'}`,
               `mode: ${session.mode}${session.promptActive ? ' (turn running)' : ''}; pi perms: ${session.permissionMode}; grok mode: ${session.grokMode}`,
               `grok context: ${session.lastContextTokens != null ? `${session.lastContextTokens.toLocaleString()} / ${contextWindowFor(session.grokModel).toLocaleString()}` : 'unknown'}`,
@@ -362,5 +367,6 @@ export default async function grokModel(pi: ExtensionAPI) {
   // Flush batched rows while the old session or branch is still current.
   pi.on('session_before_tree', () => { flushTools(); });
   pi.on('session_tree', (_event, ctx) => { lastCtx = ctx; current?.detach(); current = configure(new GrokModelSession(connection, ctx.sessionManager.getSessionId(), ctx.cwd), ctx); });
+  // close() ends the leash's stdin; the leash kills and reaps its Grok process group.
   pi.on('session_shutdown', async () => { flushTools(); current?.detach(); current = undefined; await connection.close(); });
 }

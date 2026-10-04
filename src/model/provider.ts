@@ -2,6 +2,7 @@
 // Pi drives turns, shows the stream, and can lend extra tools through Grok's client-hosted
 // MCP channel; those are the only tool calls that reach Pi's executor.
 import { createAssistantMessageEventStream, getCurrentSystemPrompt, getCurrentTools, type AssistantMessage, type AssistantMessageEventStream, type Message, type Model, type Api, type SimpleStreamOptions, type ToolCall, type ToolResultMessage, type TranscriptContext, type Usage } from '@earendil-works/pi-ai';
+import { isExplained } from './child-report.ts';
 import type { GrokModelConnection } from './connection.ts';
 import { GrokModelSession, type TurnEvent, type GrokTurnUsage } from './session.ts';
 import { callableName, createPiToolRoutes, descriptionForPiTool, selectPiTools, type PiToolAttribution, type PiToolPolicy } from '../tool-policy.ts';
@@ -199,9 +200,8 @@ export function createGrokStream(connection: GrokModelConnection, sessions: Sess
         throw new Error(`Tool results ${orphans.map((o) => o.toolCallId).join(', ')} do not match any pending Grok tool call.`);
       }
       stream.push({ type: 'start', partial: message });
-      if (session.reconnected) {
-        const note = `[grok reconnected after: ${session.reconnected}; session ${session.grokSessionId} reloaded]\n`;
-        session.reconnected = undefined;
+      const note = session.takeNote();
+      if (note) {
         const index = message.content.push({ type: 'thinking', thinking: note }) - 1;
         stream.push({ type: 'thinking_start', contentIndex: index, partial: message });
         stream.push({ type: 'thinking_delta', contentIndex: index, delta: note, partial: message });
@@ -278,7 +278,8 @@ export function createGrokStream(connection: GrokModelConnection, sessions: Sess
               detach(); signal?.removeEventListener('abort', onAbort);
               closeBlock();
               const dropped = /connection closed|socket|EPIPE|closed/i.test(event.error.message);
-              fail('error', dropped ? `Grok connection dropped mid-turn (${event.error.message}). Send the message again; the next turn reconnects and reloads the Grok session.` : event.error.message);
+              const text = isExplained(event.error.message) ? event.error.message : dropped ? `Grok connection dropped mid-turn (${event.error.message}). Send the message again; the next turn reconnects and reloads the Grok session.` : event.error.message;
+              fail('error', text);
               resolve();
               return;
             }

@@ -1,6 +1,29 @@
+> The 2026-09-28 sections describe the WebSocket gateway this branch removed. They are not evidence for the stdio child. The 2026-10-04 sections are.
+
 # Launch verification
 
 Live results for gate G4 in [launch.md](launch.md). Record each run here, not in `launch.md`. Raw results were written to `evidence/`, which is gitignored and not in the repository. The outcomes below are the record of those runs, not proof that the current version behaves the same way. Treat each one as unverified for the current version until the probe runs again ([usage.md](usage.md#live-probes)).
+
+## Client-death probe, 2026-10-04
+
+Grok Build 1.0.46 (2765805b9442), Pi 1.0.2, Node 26.10.0. `scripts/client-gone-probe.ts` spawns a Grok stdio client directly, registers a `PreToolUse` hook with a 10 s timeout, asks for `touch marker.txt`, and SIGKILLs the client while the hook is unanswered. Raw results in the gitignored `evidence/client-gone-probe-kill.json` and `evidence/client-gone-probe-kill-no-leader.json`.
+
+| Client | Outcome |
+| --- | --- |
+| `grok agent --leader stdio` against the gateway's shared leader | Fail open. The leader kept the turn, timed the hook out, and ran the command: the marker appeared 10.0 s after the hook was issued, with the client already dead. |
+| `grok agent --no-leader stdio` (agent is the client process) | The tool never ran. Grok had issued the `tool_call`; the marker did not appear in 25 s, and no Grok process was left behind. |
+
+Consequence: under a shared leader, Pi's death does not stop a pending tool, so the gateway's `ReverseRequestGuard` is what makes hooks fail closed. Without a leader, process lifetime does the same job. A hung but alive client is unguarded in both cases unless something outside it answers before Grok's hook timeout.
+
+## stdio-direct probes, 2026-10-04
+
+Grok Build 1.0.46, Pi 1.0.2, Node 26.10. Commit `7c26faa`. One `--no-leader` stdio child. Lent tools over `_x.ai/mcp/sdk_call`. The same day, `PI_GROK_MCP=http` also passed the model probe; that HTTP server was removed after this run.
+
+| Command | Outcome |
+| --- | --- |
+| `node scripts/model-probe.ts` with the sdk path | Pass. `tools/list`, `pi_echo_secret` called, 5 s held wait, token returned, `end_turn`. |
+| `node scripts/reconnect-probe.ts` | Pass. Turn 2 recalled the token. The Grok session id was unchanged. The `--no-leader` child exited with each Pi. |
+| Interactive Pi on this commit | One `--no-leader` child per Pi. The stop hook ran over the pipe. Usage and context were reported. |
 
 ## Run 2026-09-28
 

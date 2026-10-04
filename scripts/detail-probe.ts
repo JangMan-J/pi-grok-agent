@@ -1,15 +1,3 @@
-import WebSocket from 'ws'; import { readConfig } from '../src/config.ts';
-const c = await readConfig(); const ws = new WebSocket(c.url, { headers: { Authorization: `Bearer ${c.secret}` } });
-await new Promise<void>((r, j) => { ws.once('open', r); ws.once('error', j); });
-let n = 0; const p = new Map<number, any>(); const send = (m: unknown) => ws.send(JSON.stringify(m));
-const req = (method: string, params: unknown) => new Promise<any>((res, rej) => { const id = ++n; p.set(id, { res, rej }); send({ jsonrpc: '2.0', id, method, params }); });
-const infos: any[] = [];
-ws.on('message', (d) => { const m = JSON.parse(d.toString()); if (p.has(m.id) && ('result' in m || 'error' in m)) { const x = p.get(m.id); p.delete(m.id); m.error ? x.rej(new Error(JSON.stringify(m.error))) : x.res(m.result); return; } if (m.method === 'session/update' && m.params.update?.sessionUpdate === 'session_info_update') infos.push(m.params.update); });
-await req('initialize', { protocolVersion: 1, clientInfo: { name: 'd', version: '0' }, clientCapabilities: { fs: { readTextFile: false, writeTextFile: false }, terminal: false } });
-await req('authenticate', { methodId: 'cached_token' }).catch(() => {});
-const s = await req('session/new', { cwd: '/tmp', mcpServers: [], _meta: { yoloMode: false } });
-console.log('sessionDetail:', JSON.stringify(s._meta['x.ai/sessionDetail']).slice(0, 600));
-console.log('sessionConfig keys:', Object.keys(s._meta['x.ai/sessionConfig'] ?? {}).join(','));
-await req('session/prompt', { sessionId: s.sessionId, prompt: [{ type: 'text', text: 'Reply with the single word ok.' }] });
-console.log('session_info_update after a turn:', JSON.stringify(infos.at(-1)).slice(0, 500));
-ws.close();
+// The former procedure is in git history before stdio-direct.
+console.error('stdio-direct: this probe targeted the removed WebSocket gateway and was not rewritten.');
+process.exit(2);

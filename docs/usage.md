@@ -11,13 +11,14 @@ This page is the reference for settings, commands, and operation. Start with the
 - [Grok permission prompts](#grok-permission-prompts)
 - [Lent Pi tools](#lent-pi-tools)
 - [Hooks around Grok tools](#hooks-around-grok-tools)
-- [Gateway guard](#gateway-guard)
+- [Leash watchdog](#leash-watchdog)
 - [Generated media and attached images](#generated-media-and-attached-images)
 - [Settings](#settings)
 - [Environment variables](#environment-variables)
 - [Session lifecycle](#session-lifecycle)
 - [Files and network](#files-and-network)
-- [Run a second, isolated gateway](#run-a-second-isolated-gateway)
+- [Stdio log](#stdio-log)
+- [Isolation](#isolation)
 - [Checks](#checks)
 - [Live probes](#live-probes)
 - [Troubleshooting](#troubleshooting)
@@ -29,7 +30,8 @@ This page is the reference for settings, commands, and operation. Start with the
 | Pi extension | `src/model.ts` | Registers provider `grok`, the `/grok` command, the steer handler, and the renderers for `grok-tool`, `grok-tools`, `grok-media`, `grok-steer`, and `grok-command`. |
 | Tool rows | `src/tool-batch.ts` | Groups routine Grok tool calls into `grok-tools` rows. A failure, denial, media result, or post-edit note gets its own `grok-tool` row; it first writes the calls batched before it, so rows keep call order. |
 | Stream adapter | `src/model/provider.ts` | Turns a Pi turn into an ACP `session/prompt` and turns ACP updates into Pi stream events. |
-| Connection | `src/model/connection.ts` | One WebSocket to the gateway. Creates or loads Grok sessions and routes reverse requests. |
+| Connection | `src/model/connection.ts` | Spawns one non-detached leash per Pi process, sends heartbeats and dialog extensions, creates or loads Grok sessions, and routes reverse requests. |
+| Leash | `leash/src/runtime.rs`, `leash/src/tracker.rs` | Rust process watchdog; group kill on Pi stall/EOF, deny/cancel on overdue tracked requests, late-reply suppression. |
 | Session state | `src/model/session.ts` | Turn state, hook answers, lent tool calls, media copies, usage totals. |
 | Hooks | `src/model/hooks.ts` | Tool classification, capability gate, post-edit check, stop check. |
 | Permissions | `src/model/permissions.ts` | Pi dialogs and headless answers for Grok permission prompts. |
@@ -37,31 +39,13 @@ This page is the reference for settings, commands, and operation. Start with the
 | Steering | `src/model/steer.ts` | Sends mid-turn Enter to Grok's `_x.ai/interject`. |
 | Lent tool policy | `src/tool-policy.ts`, `src/model/extensions-command.ts` | Selects the Pi tools lent to Grok, names them for MCP, and runs `/grok extensions`. |
 | Login | `src/login.ts` | Runs `grok login --device-auth` for `/grok login`. |
-| Auto-start | `src/launch.ts` | Starts the bundled gateway when nothing listens on the endpoint. |
-| Transport | `src/client.ts` | Validates the endpoint and carries JSON-RPC over the WebSocket. |
-| Gateway | `scripts/server.ts` | Supervises one `grok agent leader`, bridges each WebSocket to a stdio leader client, relays lent-tool MCP calls, and guards reverse requests. |
-| Settings | `src/config.ts` | Reads `grok-ws.json`, the secret, and environment overrides. Validates guard tiers. |
+| Settings | `src/config.ts` | Reads `grok-ws.json` and environment overrides. Validates leash stall, request, and dialog deadlines. |
 
 ## Install options
 
-The README uses one command: `pi install npm:pi-grok-agent`. The package contains the gateway. When a Grok turn finds nothing listening on a loopback `ws://` endpoint, the extension starts that gateway (see [Gateway auto-start](#gateway-auto-start)). The gateway runs compiled JavaScript from `dist/`, because Node does not strip TypeScript types under `node_modules`. The extension stays TypeScript: Pi loads it with its own loader.
+Install with `pi install npm:pi-grok-agent`. The npm tarball ships a **linux-x64** `bin/pi-grok-leash` (`package.json`, `.github/workflows/release.yml`). Other platforms must build from a repository checkout: `npm install`, then `npm run build:leash`, then load the checkout or set `PI_GROK_LEASH` to its binary. Rust **stable** is required (verified with rustc 1.99.0); no `rust-toolchain.toml` is present. The crate uses Unix APIs: other Unix builds/runtime are unverified and Windows is unsupported (`leash/README.md`, `leash/src/runtime.rs`). The npm tarball does not include the Rust crate, so source builds need the repository.
 
-To run the gateway yourself instead, for example under a service manager, install the command with `npm install -g pi-grok-agent` and run `pi-grok-gateway`. Pi does not put a package's `bin` on `PATH`, so this needs its own install. An extension that finds your gateway running does not start another one.
-
-With a clone, `npm run server` and the extension (`pi -e .` or `pi install .`) come from the same checkout.
-
-Pi does not install dependencies for a local path. It loads the directory in place. Run `npm install --omit=dev` in the clone before the first start. Pi runs the same `npm install --omit=dev` when it installs a git source.
-
-A clone also auto-starts the gateway: it runs `scripts/server.ts` from the checkout. A git install (`pi install git:github.com/JangMan-J/pi-grok-agent`) takes the same path; its auto-start is not yet tested live. All install paths are recorded in [launch-verification.md](launch-verification.md).
-
-### Gateway auto-start
-
-- Trigger: a Grok turn opens the connection, and nothing accepts TCP on the configured loopback `ws://` endpoint. A `wss://` endpoint is never started.
-- Process: the gateway of the installed version runs as a detached process with its own session, working directory `~`, and Pi's environment. It writes to `<agent dir>/grok-ws.log`. The first turn waits until the port accepts connections, about 5 seconds with a cold leader.
-- Lifetime: the gateway keeps running after Pi exits. Every Pi process on the machine shares it. Stop it with `pkill -INT -f 'pi-grok-agent/(dist/)?scripts/server'`; it stops its leader.
-- Two Pi processes that start at the same time are safe. The gateway binds its port before it starts or adopts a leader, so the second one exits with `EADDRINUSE` and both connect to the first.
-- `/grok debug` shows `auto-start on` or `off`, and the pid when this Pi process started the gateway.
-- Turn it off with `"autoStartGateway": false` in `grok-ws.json` or `PI_GROK_AUTOSTART=0`. Then start the gateway yourself before the first Grok turn.
+For a built checkout, run `pi -e . --model grok/grok-4.7`. Pi loads the TypeScript extension using its own loader. The first Grok turn starts `pi-grok-leash`, which spawns `grok --permission-mode default agent --no-leader stdio`; loading the extension alone starts nothing. No daemon, shared leader, fixed port, or bearer secret is required. Closing the connection closes the leash's stdin, asking it to kill and reap Grok's group (`src/model/connection.ts`, `leash/src/runtime.rs`). Node >=22.19 and Grok on PATH (or `PI_GROK_BINARY`) are required. Grok uses its own stored login, not an xAI API key.
 
 ## Models and Pi controls
 
@@ -97,8 +81,8 @@ The steer handler acts only while the active model is `grok/*`. After a switch t
 
 | Command | Effect |
 | --- | --- |
-| `/grok debug` | Shows the gateway URL and connection state, the Grok session ID, Grok mode, Pi permission mode, Grok context size, usage and cost totals, blocked Pi extensions, and, after the first Grok turn in this Pi process, the lent tools and the tools the blocked extensions withhold, recent hook decision counts, and the number of Grok tool calls seen. |
-| `/grok login` | Runs `grok login --device-auth` in the background and shows the URL and code as an entry and a notice. Grok may open the page itself, in your default browser. Approve it there; Pi reports when the login finished. Works before any Grok session exists. A running gateway picks up the new login on the next turn, without a restart. |
+| `/grok debug` | Shows the stdio binary and connection state, the child pid and uptime, the last 3 exits (time, and exit code or signal), the last 10 stderr lines, pending Pi-to-Grok requests, MCP tools lent / calls served / calls failed, the stdio log path, the Grok session ID, Grok mode, Pi permission mode, Grok context size, usage and cost totals, blocked Pi extensions, and, after the first Grok turn in this Pi process, the lent tools and the tools the blocked extensions withhold, recent hook decision counts, and the number of Grok tool calls seen. |
+| `/grok login` | Runs `grok login --device-auth` in the background and shows the URL and code as an entry and a notice. Grok may open the page itself, in your default browser. Approve it there; Pi reports when the login finished. Works before any Grok session exists. A signed-out child is dropped; the next turn initializes a fresh child. |
 | `/grok perms` | Shows the Pi permission mode. |
 | `/grok perms auto` | Default. Mirrors the Pi session's tools onto Grok's tools. |
 | `/grok perms read-only` | Denies Grok's edit and shell tools, whatever tools the Pi session has. |
@@ -155,7 +139,7 @@ The core set Grok already has natively is always withheld under `extensions`: `r
 
 ### Blocked extension/tool surfaces
 
-Some Pi extensions duplicate or disrupt Grok native harness behavior, so Grok would route work through the MCP loopback instead of using its own tools. Under `extensions`, blocked extensions or tool surfaces are withheld on top of the core set. Package defaults (`DEFAULT_BLOCKED_PI_EXTENSIONS` in `src/tool-policy.ts`) are:
+Some Pi extensions duplicate or disrupt Grok native harness behavior, so Grok would route work through MCP-over-ACP instead of using its own tools. Under `extensions`, blocked extensions or tool surfaces are withheld on top of the core set. Package defaults (`DEFAULT_BLOCKED_PI_EXTENSIONS` in `src/tool-policy.ts`) are:
 
 - `pi-lens`: code-navigation tools such as `symbol_search`, `project_report`, `module_report`, `read_symbol`, `read_enclosing`, `lens_diagnostics`, and related lazy tools overlap Grok's native `read_file`, `grep`, `list_dir`, and LSP.
 - `codemode`: a meta-tool that can call other Pi tools and would bypass the curated lent-tool surface.
@@ -177,7 +161,7 @@ Grok's model calls a lent tool through `use_tool` with the name `pi__<name>`. Gr
 
 The Pi assistant message uses the Pi tool name. Pi executes the tool through its own loop and permission gates, and the same Grok turn continues with the result. Pi passes the complete tool result to Grok.
 
-The gateway serves the lent tools as an HTTP MCP server at `http://127.0.0.1:2419/mcp/<token>`. It relays each MCP message to the Pi connection that registered the token. Grok connects to that server with its own MCP client, so the stock `grok` binary works.
+Lent tools go over Grok's MCP-over-ACP channel on the same stdio pipe. `initialize` sends `_meta['x.ai/mcp/sdk']: true`. `session/new` and `session/load` send `_meta['x.ai/mcp/servers']` with the server name and id. Grok then sends each MCP JSON-RPC message as `_x.ai/mcp/sdk_call`, and `session.ts` `onMcp` answers it (`src/model/connection.ts`, `test/transport.test.ts`). Live check 2026-10-04: tools/list, `pi_echo_secret`, a 5 s held wait, and the token came back (`docs/launch-verification.md`).
 
 Grok reads the tool list once for each Grok session. If Grok has an equivalent native tool, it usually uses its own tool.
 
@@ -210,21 +194,31 @@ Precedence: `denyGrokTools`, then `allowGrokTools`, then the capability mirror, 
 
 Each completed Grok tool call becomes a consolidated session entry with the tool, input, status, output (up to 8000 characters), and duration. Routine completions batch into one `grok-tools` row per 10 calls (`N calls (2 read_file · 1 grep)` plus total ms; leftovers flush at turn end). Failures, denials, media captures, and post-edit notes keep their own `grok-tool` rows. The expanded batch view shows each call with up to 200 characters of output; the expanded single view shows up to 600. Turn usage is not a separate entry: the provider puts it on the assistant message in Pi's convention (`input` excludes cached reads; `cacheRead` separate), where Pi and zentui's Turn summary and footer cache figure already show it. Setup, MCP readiness, model switches, and intermediate tool phases are silent. No model receives these entries.
 
-## Gateway guard
+## Leash watchdog
 
-When a Grok client hook times out, Grok continues as if the hook allowed the call. Grok waits with no limit for a permission prompt. So the gateway answers for Pi when Pi cannot answer:
+`pi-grok-leash` is a separate Rust process between Pi and Grok. Pi sends `pi/heartbeat` every 100 ms, including while idle. Missing heartbeats for `stallMs` kills Grok's process group; EOF does the same. On Linux, parent-death signals also kill the leash and its immediate Grok child when Pi dies abruptly. Unlike a thread inside Pi, the leash can run while the whole Pi process is paused (`src/model/connection.ts`, `leash/src/runtime.rs`, `test/leash-process.test.ts`).
 
-| Tier | Condition | Answer |
-| --- | --- | --- |
-| 0 | Pi answers | Pi's answer |
-| 1 | Pi sent `pi/gate-ack` with `dialog: true` | Wait `dialogMs`, then reject |
-| 1 | Pi sent `pi/gate-ack` with `check: true` | Wait `checkBudgetMs`, then continue |
-| 1 | Pi sent `pi/gate-ack` without flags | Wait `policyMs`, then deny or reject |
-| 2 | No ack in `ackMs`, or the Pi socket closed | Deny (`pre_tool_use`), continue (`post_tool_use`, `stop`), reject (permission), cancel (question) |
+The leash tracks `_x.ai/hooks/run`, `session/request_permission`, and `_x.ai/ask_user_question`. An overdue hook gets `decision: deny`; permissions and questions get a cancelled outcome. The leash drops later replies for that ID. Opening a hook confirm, permission dialog, or question dialog sends `pi/extend` with the dialog budget; it never grants permission (`leash/src/tracker.rs`, `src/model/connection.ts`, `test/leash.test.ts`).
 
-Each request has one guarded lifetime on the gateway. Pi's answer settles it and is forwarded. Once the gateway has answered for Pi, a later answer from Pi is dropped, so Grok gets exactly one response per request. When `/grok perms ask` opens a confirm dialog for a `pre_tool_use` hook, Pi sends a second ack with `dialog: true`, and the request moves from the policy deadline to the dialog deadline. `test/gateway.test.ts` checks these paths on the real wire with a fake Grok binary.
+| Setting in `guard` | Default | Environment override | Meaning |
+| --- | --- | --- | --- |
+| `stallMs` | 1000 ms | `PI_GROK_STALL_MS` | Maximum heartbeat silence before a group kill. |
+| `requestMs` | 25000 ms | `PI_GROK_REQUEST_MS` | Tracked reverse-request deadline; must be below 30000 ms. |
+| `dialogMs` | 570000 ms | `PI_GROK_DIALOG_MS` | Deadline from opening Pi UI; must be below Grok's 600000 ms hook cap. |
 
-Defaults: `ackMs` 5000, `policyMs` 15000, `checkBudgetMs` 590000, `dialogMs` 600000. The settings loader refuses `ackMs` or `policyMs` at or above 30000 (the `pre_tool_use` hook timeout that this package registers), `checkBudgetMs` at or above 600000 (Grok's hook limit), and `ackMs` above `policyMs`.
+Environment values override `grok-ws.json`. Values must be finite positive milliseconds and are floored to integers (`src/config.ts` `resolveGuard`, `test/config.test.ts`).
+
+A stall ends the running turn with `[grok stopped by pi-grok-leash: stall after <N> ms; no unguarded tool ran]`; the next turn respawns and loads the stored session. A deadline instead shows `[pi-grok-leash denied <method> <id> after <N> ms: Pi did not answer]`, aborts the expired dialog/handler, and **keeps the child and turn running**. This is the `d4e5891` behavior; it supersedes the earlier frame contract's instruction to end the turn on `deadline`. The stall message is not a guarantee about tools already executing outside Grok's group. Child exits still end an active turn (`src/model/child-report.ts`, `src/model/connection.ts`, `test/leash.test.ts`).
+
+`/grok debug` shows leash path/version, leash and Grok PIDs, all three deadlines, the last five leash events with timestamps, late-reply count, and the last three child exit statuses. Deadlines appear in leash events, not child exits (`connection.ts` `debugLines`, `test/leash.test.ts`).
+
+Set `PI_GROK_LEASH_LOG` to an append-only log path. The Rust log contains start/child arguments, leash events (`ready`, `stall`, `deadline`, `parent-gone`, `child-exit`, `late-reply`), and a graceful exit record with malformed-line count. It does not log every heartbeat or frame and does not rotate. Abrupt SIGKILL cannot write an exit record. This is separate from Pi's [stdio log](#stdio-log) (`leash/src/runtime.rs`, `leash/tests/process.rs`).
+
+Executable resolution is `PI_GROK_LEASH`, then executable `<package root>/bin/pi-grok-leash`, then `pi-grok-leash` on PATH. A missing leash refuses startup and names `npm run build:leash`; it does not silently fall back to direct Grok. `PI_GROK_LEASH=none` explicitly opts out and `/grok debug` says **UNGUARDED** (`src/model/connection.ts` `resolveLeash`, `test/leash.test.ts`).
+
+Residuals: stalls shorter than `stallMs`; effects of a tool already executing when the kill lands; tools/grandchildren outside Grok's group; abrupt Linux Pi SIGKILL kills leash → Grok through parent-death signals but not Grok's entire group. Whole-machine suspension stops all processes: monotonic timing and a gap greater than `10 × stallMs` re-baseline avoid a false kill on resume. Simulated suspension is covered in `test/leash-process.test.ts`; actual laptop suspend and live Grok-with-leash probes remain **unverified** (`leash/src/tracker.rs`, `leash/README.md`).
+
+The old `src/model/guard.ts` is removed. Pi-to-Grok request timeouts still live in `connection.ts` `guardedRequest`; they are distinct from the leash's three reverse-request deadlines (`test/hardening.test.ts`).
 
 ## Generated media and attached images
 
@@ -237,7 +231,7 @@ PNG shows directly. JPEG, WebP, and GIF are converted to PNG with `magick` for d
 
 The `grok-media` message is for display only. The provider removes it from the prompt, so Grok does not receive its own image back.
 
-Development runs probed `image_gen` only. `scripts/image-probe.ts` repeats that check. Image edit and the video types are recognized by name in code and are not yet probed.
+Historical development runs probed `image_gen` only; its gateway probe is now disabled. Image edit and the video types are recognized by name in code and are not yet probed.
 
 ## Settings
 
@@ -245,8 +239,6 @@ Optional settings file: `~/.pi/agent/grok-ws.json`. If `PI_CODING_AGENT_DIR` is 
 
 ```json
 {
-  "url": "ws://127.0.0.1:2419/ws",
-  "secretFile": "~/.pi/agent/grok-ws.secret",
   "piTools": "extensions",
   "blockedPiExtensions": ["pi-lens", "codemode", "image-generation"],
   "headlessPermissions": "dialog",
@@ -259,15 +251,12 @@ Optional settings file: `~/.pi/agent/grok-ws.json`. If `PI_CODING_AGENT_DIR` is 
     "postEditCheck": "",
     "stopCheck": ""
   },
-  "guard": { "ackMs": 5000, "policyMs": 15000, "checkBudgetMs": 590000, "dialogMs": 600000 }
+  "guard": { "stallMs": 1000, "requestMs": 25000, "dialogMs": 570000 }
 }
 ```
 
 | Key | Meaning |
 | --- | --- |
-| `url` | Gateway WebSocket URL. A non-loopback URL must use `wss://`. The gateway itself accepts only a loopback `ws://` URL that ends in `/ws`. |
-| `secretFile` | Absolute path or a path that starts with `~/`. |
-| `autoStartGateway` | `true` (default) or `false`. See [Gateway auto-start](#gateway-auto-start). |
 | `piTools` | `extensions` (default), `none`, `all`, or a comma/list of exact Pi tool names. See [Lent Pi tools](#lent-pi-tools). |
 | `blockedPiExtensions` | Effective blocked extension/tool-surface list for `piTools: "extensions"`. If present, replaces the package defaults. |
 | `permissionMode` | Pi-side permission mode set by `/grok perms`: `yolo`, `auto` (default), `ask`, or `readonly`. |
@@ -294,20 +283,18 @@ Example with checks:
 
 | Variable | Overrides or sets |
 | --- | --- |
-| `GROK_ACP_URL` | `url` |
-| `GROK_AGENT_SECRET` | The secret. The gateway then does not create a secret file. |
-| `PI_CODING_AGENT_DIR` | Pi's agent directory, which holds `grok-ws.json` and the secret |
+| `PI_CODING_AGENT_DIR` | Pi's agent directory, which holds `grok-ws.json` and Pi sessions |
 | `PI_GROK_PI_TOOLS` | `piTools` |
 | `PI_GROK_HEADLESS_PERMISSIONS` | `headlessPermissions` |
 | `PI_GROK_MEDIA_DIR` | `mediaDir` |
 | `PI_GROK_GROK_MODE` | `grokMode` |
-| `PI_GROK_AUTOSTART` | `autoStartGateway`. `0`, `false`, `no`, or `off` turn it off. |
 | `PI_GROK_DENY_TOOLS` | `hooks.denyGrokTools`, comma-separated |
 | `PI_GROK_POST_EDIT_CHECK` | `hooks.postEditCheck` |
 | `PI_GROK_STOP_CHECK` | `hooks.stopCheck` |
-| `PI_GROK_ACK_MS`, `PI_GROK_POLICY_MS`, `PI_GROK_CHECK_BUDGET_MS`, `PI_GROK_DIALOG_MS` | `guard` values |
-| `PI_GROK_LEADER_SOCKET` | Gateway only. Leader socket path. Default `~/.grok/pi/leader.sock`. |
-| `PI_GROK_BINARY` | Gateway only. Grok executable. Default `grok`. |
+| `PI_GROK_STALL_MS`, `PI_GROK_REQUEST_MS`, `PI_GROK_DIALOG_MS` | `guard.stallMs`, `guard.requestMs`, `guard.dialogMs`; see [Leash watchdog](#leash-watchdog) |
+| `PI_GROK_LEASH` | Leash executable override, or `none` for explicit UNGUARDED operation |
+| `PI_GROK_LEASH_LOG` | Append-only Rust leash event log path |
+| `PI_GROK_BINARY` | Grok executable, read at spawn time. Default `grok`. |
 
 ## Session lifecycle
 
@@ -316,107 +303,80 @@ Example with checks:
 - `session/load` with the stored ID occurs only when Pi attaches a stored session that this connection has not attached yet: for example, when a new Pi process resumes the session, and after a reconnect.
 - A Pi fork or tree navigation starts a new Grok session.
 - Pi sends its system prompt as `_meta.rules` and only the new user messages or tool results as the prompt.
-- If the gateway restarts during a session, the next turn reconnects and loads the same Grok session. The turn in progress at the drop is lost.
-- The gateway supervises the leader. If the leader exits, the gateway closes the bridges and starts a new leader or adopts one that a bridge started.
+- If the child exits between turns, the next turn starts one fresh child and `session/load`s the stored id. Two turns that start together share that one child. A child that exits during a turn ends that turn with the exit code or signal and the last stderr lines. Send the message again.
+- If `session/load` reports that the id is missing, Pi sends `session/new`, stores the new id, and shows `[grok session <id> not found; started a new one]` once.
+- A stored id from another directory starts a new session. Grok keeps sessions under `~/.grok/sessions/<encoded-cwd>/` (`~/.grok/docs/user-guide/17-sessions.md`). Pi shows `[grok session <id> belongs to <old cwd>; started a new one]` once.
+- Escape sends `session/cancel`. If the prompt does not settle within 5 seconds, Pi kills the child. The turn ends either way.
+- A fresh `--no-leader` child loaded the stored Grok session after a Pi restart on 2026-10-04 (`docs/launch-verification.md`).
 - After you change files under `src/model/`, start a new `pi` process. `/reload` can keep the provider module that Pi already imported.
 
 ## Files and network
 
-| Item | Created by | Content |
-| --- | --- | --- |
-| `~/.pi/agent/` | Gateway | Directory, mode 0700, if missing |
-| `~/.pi/agent/grok-ws.secret` | Gateway, first start | Random bearer secret, mode 0600 |
-| `~/.pi/agent/grok-ws.json` | You | Optional settings |
-| `~/.pi/agent/grok-ws.log` | Auto-started gateway | Gateway output, appended, mode 0600 |
-| `~/.grok/pi/leader.sock` and `leader.lock` | Grok leader | Leader socket. It is outside Grok's `leader-*.sock` discovery pattern, so the Grok TUI does not attach to it. |
-| `.pi/grok-images/` in the Pi working directory | Extension | Copies of Grok media, with a `.gitignore` |
-| `pi-grok-images/` in the system temp directory | Extension | Attached images for Grok and PNG copies for display |
-| Pi session file | Pi | `grok-model-session`, `grok-tool`, `grok-steer`, and `grok-command` entries |
-| Grok session data | Grok | Stored by Grok under `~/.grok/` |
+Settings stay in `~/.pi/agent/grok-ws.json` or `PI_CODING_AGENT_DIR`. Pi session files hold the Grok session ID and display entries. Media copies stay in `.pi/grok-images/`; attached images use the system temporary directory (`src/model/session.ts`, `src/model/provider.ts`). Grok manages its own login and data under `~/.grok/`. Child stderr and skipped stdout frames are in the [stdio log](#stdio-log).
 
-| Connection | Direction | Authentication |
-| --- | --- | --- |
-| `ws://127.0.0.1:2419/ws` | Pi to gateway | `Authorization: Bearer <secret>` header |
-| `http://127.0.0.1:2419/mcp/<token>` | Grok to gateway | Token in the path. Unknown tokens get 404. |
-| Leader socket | Gateway bridges to Grok leader | Local Unix socket |
-| Grok's own network use | Grok | Managed by Grok Build, not by this package |
+ACP uses pipes. Lent tools use the same pipe. Grok's external network use is managed by Grok itself (`src/model/connection.ts`).
 
-## Run a second, isolated gateway
+## Stdio log
 
-Use this for a demo or a test next to a gateway that is in use. A second gateway with the default settings exits with `EADDRINUSE` before it touches any leader, so the running gateway is unaffected. It still needs its own port, leader socket, and agent directory to run.
+Child stderr and skipped stdout frames go to `<agent dir>/grok-stdio.log`. The agent dir is `PI_CODING_AGENT_DIR`, or `~/.pi/agent` when that variable is unset. Each line is `stderr: …`, `framing: skipped non-JSON stdout: …`, `exit: …`, or `spawn: …`.
 
-Set the same variables in the gateway terminal and in the Pi terminal:
+The file rotates at 2 MB. When the next line would start past that size, the current file is renamed to `grok-stdio.log.1` and a new log starts. One line can push the live file past 2 MB before the next rotation. `/grok debug` prints the path and the last 10 stderr lines.
 
-```sh
-export PI_CODING_AGENT_DIR="$HOME/.pi-grok-isolated/agent"
-export GROK_ACP_URL=ws://127.0.0.1:2429/ws
-export PI_GROK_LEADER_SOCKET="$HOME/.grok/pi/isolated-leader.sock"
-```
+## Isolation
 
-Then run `npm run server` in the clone, and in the other terminal run `pi -e <path-to-clone> --model grok/grok-4.7`. The gateway creates the leader directory `~/.grok/pi/` only, so keep the socket in that directory. `PI_CODING_AGENT_DIR` also gives Pi a separate agent directory with its own settings and sessions.
-
-To clean up, press Ctrl+C in the gateway terminal. This stops its bridges and its leader. Then remove `~/.pi-grok-isolated`.
-
-Do not run `scripts/reconnect-probe.ts` for isolated validation. These variables do not isolate it. See [Live probes](#live-probes).
+Use `PI_CODING_AGENT_DIR` for separate Pi settings/sessions and `PI_GROK_BINARY` to select the executable. Both are inherited at child spawn time. Each Pi owns its agent. There is no shared leader or leader socket. These variables do not isolate Grok's login or sandbox its tools.
 
 ## Checks
 
 ```sh
 npm install          # includes TypeScript and type packages
+npm run build:leash   # Rust stable; builds bin/pi-grok-leash
 npm run check        # tsc --noEmit
 npm test             # node --test test/*.test.ts, no Grok calls
+npm run test:leash-real # Pi integration with the Rust leash and fake Grok
 ```
 
-`test/gateway.test.ts` runs the real `scripts/server.ts` with `test/fixtures/fake-grok.ts` as the Grok binary (`PI_GROK_BINARY`) in a scratch `HOME`. It covers a launch that loses its port, leader ownership through shutdown, the guard tiers, the one-answer rule, disconnect, `ask` mode's dialog deadline, a turn that outlives its Pi session, a missing secret file, gateway auto-start, a signed-out Grok, and the model switch.
+`test/transport.test.ts` starts real stdio children using `test/fixtures/fake-grok.ts` for transport/session behavior. `test/hardening.test.ts` covers request timeouts and recovery. `test/leash.test.ts` covers framing, heartbeat consumption, dialog extensions, synthetic denials, late replies, startup failures, debug output, and turn recovery; `npm run test:leash-real` runs it against `bin/pi-grok-leash` and skips when that binary is absent. `test/leash-process.test.ts` uses `test/fixtures/leash-parent.ts` for Pi SIGKILL with a pending hook, Pi SIGSTOP for 3 s with a pending hook and while idle, and a 15 s pause of Pi + leash + fake Grok (suspend guard). These Linux process checks require the built binary and add roughly 30 s. `leash/tests/process.rs` provides Rust process coverage. No real Grok is run.
 
-The unit tests cover the turn split around a lent tool call, abort and resend, prompt tail selection, display-only messages, usage mapping, tool classification and gates, `/grok perms` modes, guard tier validation, question dialogs, steering with a mocked Grok, the steer handler across a model switch, `/grok` command timeout and completion through the shared prompt lifetime, media copies, the lent tool policy and names, `/grok extensions`, `/grok login` output parsing, and context windows from Grok's model cache.
+The unit tests cover the turn split around a lent tool call, abort and resend, prompt tail selection, display-only messages, usage mapping, tool classification and gates, `/grok perms` modes, leash deadline validation, question dialogs, steering with a mocked Grok, the steer handler across a model switch, `/grok` command timeout and completion through the shared prompt lifetime, media copies, the lent tool policy and names, `/grok extensions`, `/grok login` output parsing, and context windows from Grok's model cache.
 
 ## Live probes
 
-The probe scripts in `scripts/` run against a running gateway and your Grok login. They cost Grok usage. Several of them allow Grok's permission prompts inside temporary directories. The scripts with a file in the `Writes` column below write JSON results to `evidence/` in the repository root. Git ignores that directory; the only tracked file in it is the demo video. Create it first:
+**Live probes against real Grok with the leash have not been run.** The results below predate the leash and do not verify it.
 
-```sh
-mkdir -p evidence
-npm run test:live    # model-live.sh gateway, then hooks-live.sh
-```
+Live probes spend Grok usage: run only when explicitly requested. `scripts/model-probe.ts` checks `_x.ai/mcp/sdk_call` for a Pi-held tool. `scripts/reconnect-probe.ts` restarts Pi and checks `session/load` of the stored Grok session. `npm run test:live` invokes those two probes. They write `evidence/model-probe.json` and `evidence/reconnect-probe.json`. Both passed on 2026-10-04 (`docs/launch-verification.md`).
 
-| Script | Checks | Writes |
-| --- | --- | --- |
-| `scripts/model-live.sh gateway` | A real `pi -p --model grok/grok-4.7` reads and writes files. Records whether Pi or Grok executed the tools. | `evidence/model-live-gateway-<policy>.json` |
-| `scripts/hooks-live.sh` | Read-only session denies an edit. A broken edit is repaired after the check context. The stop check holds the turn. | `evidence/hooks-live.json` |
-| `scripts/model-probe.ts` | Grok finds and calls a Pi-only tool through the MCP relay and waits for a held result. | `evidence/model-probe.json` |
-| `scripts/gateway-guard-probe.ts` | A hung Pi is denied at the ack tier. A closed Pi socket rejects. A late dialog answer after an ack is used. | `evidence/gateway-guard-probe.json` |
-| `scripts/mcp-gate-probe.ts` | A marked MCP tool is allowed and an unmarked one is denied in a read-only session. | `evidence/mcp-gate-probe.json` |
-| `scripts/question-probe.ts` | `ask_user_question` round trip and `/grok` command paths. | `evidence/question-probe.json` |
-| `scripts/image-probe.ts` | `image_gen` result shape and file location. Inbound image by path. | `evidence/image-probe.json` |
-| `scripts/queue-probe.ts [interject]` | A second prompt or an interject while a turn runs. Prints a timeline. | Standard output only |
-| `scripts/reconnect-probe.ts` | Restarts the gateway, or stops the leader, between two turns. Turn 2 must keep context. | `evidence/reconnect-probe.json` or `evidence/reconnect-probe-leader.json` |
-| `scripts/hooks-probe.ts` | Raw ACP hook frames around a native tool call. | `evidence/hooks-probe.json` |
-| `scripts/perm-timing.ts`, `scripts/usage-probe.ts` | Permission round-trip timing and usage frames. | Standard output only |
-| `scripts/mcp-list-probe.ts` | Which tool fields `_x.ai/mcp/list` keeps for a Pi-hosted MCP server (`_meta`, `annotations`). | Standard output only |
-| `scripts/shell-permission-probe.ts` | What Grok does with a shell call when every permission prompt is cancelled. `PROBE_PROMPT` replaces the prompt. | Standard output only |
-| `scripts/modes-probe.ts` | Session modes and the commands Grok advertises. | Standard output only |
-| `scripts/cmd-probe.ts` | Grok's `/goal`, `/context`, and plan mode over raw ACP. | Standard output only |
-| `scripts/detail-probe.ts` | Session detail and config in the `session/new` response, and `session_info_update` after a turn. | Standard output only |
+`scripts/client-gone-probe.ts` spawns a Grok stdio client directly and kills it with a `pre_tool_use` hook unanswered. See [launch-verification.md](launch-verification.md#client-death-probe-2026-10-04).
 
-`scripts/reconnect-probe.ts` is not isolated. It hardcodes port 2419 and reads a gateway PID from `~/.pi/agent/grok-ws.pid`, a file that `npm run server` does not write. It sends SIGTERM to that PID (gateway mode) or to its `agent leader` child (leader mode). `GROK_ACP_URL`, `PI_CODING_AGENT_DIR`, and the other variables do not change these targets. Run it only when the default gateway on 2419 is disposable and the PID file names it. Its check for other clients looks only at port 2419.
-
-The results of the run recorded in [launch-verification.md](launch-verification.md) are not in the repository. Treat the probes as reproducible checks, and run them again for current results. Probe output and `evidence/` files can contain private paths, session IDs, and tokens. Review and redact them before you share them.
+`scripts/hooks-live.sh` remains an opt-in Pi-driven live check, not part of ordinary tests. Gateway-only probes exit 2 with `stdio-direct: this probe targeted the removed WebSocket gateway and was not rewritten.` They are not evidence for this branch. Historical [launch-verification.md](launch-verification.md) results describe the removed transport. Review local evidence for private paths, session IDs, and tokens before sharing it.
 
 ## Troubleshooting
 
-| Symptom | Cause and action |
-| --- | --- |
-| `Grok gateway secret not found at …` on a Grok turn | The gateway never ran with this agent directory. Start `pi-grok-gateway` (or `npm run server` in a clone) once; it creates the file. Then send the message again. Pi does not need a restart. |
-| Pi reports that the extension failed to load, with `ENOENT` for `grok-ws.secret` | A version before the lazy secret read. The gateway never ran with this agent directory. Run `npm run server` once, or set `GROK_AGENT_SECRET` in both terminals. |
-| Pi does not know the model `grok/grok-4.7` | The extension did not load. Use `pi -e <path-to-clone>` or `pi install <path-to-clone>`, and check the load error at startup. |
-| `Grok WebSocket handshake failed. Check the endpoint, server, and secret.` | The gateway is not running, the URL is different, or the two terminals use different secrets. Compare `GROK_ACP_URL` and `PI_CODING_AGENT_DIR` in both terminals. |
-| Gateway exits with `EADDRINUSE` | The port is in use. The gateway binds its port before it starts or adopts a leader, so the other gateway keeps running. See [Run a second, isolated gateway](#run-a-second-isolated-gateway). |
-| `The local launcher requires a loopback ws:// endpoint ending in /ws.` | The gateway URL is not local. The gateway serves loopback only. |
-| `Grok leader socket startup timed out.` or `Grok leader exited before startup.` | Check `grok --version`, `grok login`, and `PI_GROK_BINARY`. |
-| `Grok Build is not signed in. Run /grok login, ...` | Grok has no stored login. Run `/grok login` and approve the code, then send the message again. Pi's `/login` xAI entry does not sign in Grok Build: Grok authenticates agent sessions only with its own stored login, and `XAI_API_KEY` does not replace it. |
-| `Grok connection dropped mid-turn (…)` | The gateway or leader restarted. Send the message again. |
-| `No Grok session yet. Send a message first.` | `/grok plan`, `goal`, and `compact` need a Grok session. Send one prompt first. |
-| Headless Pi ends the turn after a permission prompt | The default `headlessPermissions` is `dialog`, which cancels. Set `deny`, `reads`, or `allow`. |
-| No inline image | The terminal has no image support, or `magick` is missing for a JPEG, WebP, or GIF. The path is still shown. |
-| No hashline tools | `~/.grok/config.toml` does not set `[toolset] file_toolset = "hashline"`. This is expected. |
+| Symptom | Cause | Fix |
+| --- | --- | --- |
+| The turn ends with `Grok child \`grok\` ended (exit code N)` or `(signal SIG…)`, often with `Last stderr:` | The child exited during the turn (crash, out of memory, `SIGKILL`, or Grok replacing its binary). | Send the message again. The next turn starts a new child and loads the stored Grok session. Parked lent-tool calls from that child are rejected. |
+| The next message shows `[grok reconnected after: …; session … reloaded]` | The child exited while Pi was idle. | None. The next turn starts one child. Two turns that open together share that start. |
+| `Cannot start Grok: \`…\` was not found` | `grok` is missing from `PATH`, or `PI_GROK_BINARY` names a missing file. The turn fails within 30 seconds. | Install Grok Build, or set `PI_GROK_BINARY` to the executable. |
+| `Cannot start Grok: \`…\` is not executable` | The file at `PI_GROK_BINARY` cannot be executed. | Point `PI_GROK_BINARY` at a Grok Build binary you can run. |
+| `does not provide \`agent --no-leader stdio\`` | The binary exited during startup with code 2 or a usage error. It is older than Grok Build 1.0.46, or it rejects `--no-leader`. Stderr is included in the message. | Install Grok Build 1.0.46 or newer, or set `PI_GROK_BINARY` to that executable. |
+| `Grok Build is not signed in. Run /grok login, …` | `initialize` returned no `cached_token` method, or `authenticate` failed. | Run `/grok login` and approve the code, then send the message again. Pi's `/login` xAI entry signs in a different client. `XAI_API_KEY` does not replace Grok's stored login. |
+| `[grok stopped by pi-grok-leash: stall after <N> ms; no unguarded tool ran]` | Pi stopped heartbeating; the leash killed Grok's group (`test/leash-process.test.ts`). | Check for an event-loop hang or debugger/process pause. Resume Pi if paused; the next turn respawns and loads the session. |
+| `[pi-grok-leash denied <method> <id> after <N> ms: Pi did not answer]` | A tracked request or extended dialog expired (`test/leash.test.ts`). | The request was denied/cancelled, not approved. The same child and turn continue; inspect the slow handler or dialog and `/grok debug`. |
+| `Cannot start pi-grok-leash … npm run build:leash` | The leash is missing, not executable, incompatible, or failed before ready (`src/model/child-report.ts`, `test/leash.test.ts`). | Build from a repository checkout with Rust stable and `npm run build:leash`; check `PI_GROK_LEASH` and the included stderr. |
+| A descendant remains after Pi SIGKILL | Linux parent-death signals kill leash and immediate Grok, not Grok's whole group; escaped tool processes can survive even a group kill (`leash/src/runtime.rs`). | Identify and stop the leftover process. Check `/grok debug` for `UNGUARDED` if the leash was disabled; non-Linux behavior is unverified. |
+| `grok-stdio.log` contains `framing: skipped non-JSON stdout` and the turn continues | The child wrote a warning, or a partial line, on stdout. A prefix glued to the next `{"jsonrpc"` frame is skipped and the frame is kept. | None. Child stderr is in the same log. It is kept off Pi's stdout. |
+| A tool result of several megabytes pauses, then completes | `stdin.write` returned false because the pipe buffer was full. | None. The next write waits until the buffer drains. |
+| `Grok did not answer <method> within Ns. The child was stopped.` | The child missed its deadline: `initialize` and `authenticate` 30 s, `session/new` and `session/load` 60 s, `session/set_mode` and `session/set_config_option` 10 s, other requests 30 s. `session/prompt` has no deadline. | Send the message again. The child was killed. The next turn starts a new child and loads the stored session. |
+| Escape ends the turn, or the message is `Grok did not acknowledge session/cancel within 5s` | Pi sent `session/cancel`. The in-flight prompt did not settle within 5 seconds. | The turn ends either way. When the acknowledgement is missing, the child is killed. Send the message again. |
+| A thinking line `[grok session <id> not found; started a new one]` | `session/load` failed because that id is not on disk (for example `~/.grok` was removed). | None. Pi starts a new session, stores the new id, and shows the note once. A timeout or a dropped pipe does not take this path. |
+| A thinking line `[grok session <id> belongs to <cwd>; started a new one]` | The stored id was created in another directory. Grok stores each session under `~/.grok/sessions/<encoded-cwd>/<id>/`. | None. Pi starts a new session for this directory and shows the note once. |
+| A tool is denied with `No Pi session owns this Grok session; the request was answered immediately.` | A hook, permission, or question arrived for a Grok session Pi no longer owns (`/new` or the session tree). | None. Pi answers deny or cancel immediately. |
+| A hook is denied with `Malformed hook payload: …` | The payload omitted `hookEventName` or another required field, or the handler threw. | None. Pi denies that hook and returns the reason. |
+| You need the child pid, uptime, recent exits, stderr, pending requests, or MCP counts | Those values are on the live connection. | Run `/grok debug`. |
+| You need stderr or skipped frames older than the last 10 lines | `/grok debug` keeps a 10-line ring. | Open `<agent dir>/grok-stdio.log`. See [Stdio log](#stdio-log). |
+| `Grok connection dropped mid-turn (…)` | The turn failed for a reason this package does not explain with its own message. | Send the message again. The next turn starts a new child and loads the stored session. Check the [stdio log](#stdio-log). |
+| Pi does not know the model `grok/grok-4.7` | The extension did not load. | Use `pi -e <path-to-clone>` or `pi install <path-to-clone>`, and read the load error at startup. |
+| `No Grok session yet. Send a message first.` | `/grok plan`, `goal`, and `compact` need a Grok session. | Send one prompt first. |
+| Headless Pi ends the turn after a permission prompt | The default `headlessPermissions` is `dialog`, which cancels. | Set `deny`, `reads`, or `allow`. |
+| No inline image | The terminal has no image support, or `magick` is missing for a JPEG, WebP, or GIF. | The path is still shown. Install `magick` to inline JPEG, WebP, and GIF. |
+| No hashline tools | `~/.grok/config.toml` does not set `[toolset] file_toolset = "hashline"`. | This is expected until that setting is present. |

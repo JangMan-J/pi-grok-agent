@@ -1,0 +1,22 @@
+[package]
+name = "pi-grok-leash"
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0"
+description = "A stdio watchdog for Pi's Grok child"
+
+[[bin]]
+name = "fake-grok"
+path = "tests/support/fake_grok.rs"
+test = false
+bench = false
+
+[dependencies]
+libc = "0.2"
+
+[profile.release]
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true
+opt-level = "z"

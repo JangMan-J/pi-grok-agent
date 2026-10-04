@@ -31,7 +31,6 @@ body:
         - None yet
         - Cloned the repository
         - Installed npm dependencies
-        - Started the gateway
         - Loaded the extension in Pi
         - Completed the first Grok turn
     validations:
