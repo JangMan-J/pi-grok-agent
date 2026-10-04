@@ -17,6 +17,7 @@ This page is the reference for settings, commands, and operation. Start with the
 - [Environment variables](#environment-variables)
 - [Session lifecycle](#session-lifecycle)
 - [Files and network](#files-and-network)
+- [Stdio log](#stdio-log)
 - [Isolation](#isolation)
 - [Checks](#checks)
 - [Live probes](#live-probes)
@@ -79,7 +80,7 @@ The steer handler acts only while the active model is `grok/*`. After a switch t
 
 | Command | Effect |
 | --- | --- |
-| `/grok debug` | Shows the stdio binary and connection state, the Grok session ID, Grok mode, Pi permission mode, Grok context size, usage and cost totals, blocked Pi extensions, and, after the first Grok turn in this Pi process, the lent tools and the tools the blocked extensions withhold, recent hook decision counts, and the number of Grok tool calls seen. |
+| `/grok debug` | Shows the stdio binary and connection state, the child pid and uptime, the last 3 exits (time, and exit code or signal), the last 10 stderr lines, pending Pi-to-Grok requests, MCP tools lent / calls served / calls failed, the stdio log path, the Grok session ID, Grok mode, Pi permission mode, Grok context size, usage and cost totals, blocked Pi extensions, and, after the first Grok turn in this Pi process, the lent tools and the tools the blocked extensions withhold, recent hook decision counts, and the number of Grok tool calls seen. |
 | `/grok login` | Runs `grok login --device-auth` in the background and shows the URL and code as an entry and a notice. Grok may open the page itself, in your default browser. Approve it there; Pi reports when the login finished. Works before any Grok session exists. A signed-out child is dropped; the next turn initializes a fresh child. |
 | `/grok perms` | Shows the Pi permission mode. |
 | `/grok perms auto` | Default. Mirrors the Pi session's tools onto Grok's tools. |
@@ -196,7 +197,7 @@ Each completed Grok tool call becomes a consolidated session entry with the tool
 
 `src/model/guard.ts` tracks one lifetime for each reverse hook, permission prompt, or question. On orderly close it denies `pre_tool_use`, continues `post_tool_use` and `stop`, rejects permissions (prefer `reject_once`), and cancels questions. Late answers are suppressed. Slow dialogs get the handler's answer, not a timer denial (`test/transport.test.ts`).
 
-No ack tiers or timers are applied. Legacy `guard` values remain validated for config compatibility (`test/guard.test.ts`). **A hung-but-alive Pi is unguarded: Grok fails open at the hook timeout.** Stdio close/process death covers Pi gone because the child is the agent itself, not a leader client. See [design limits and live-evidence status](first-class-model.md#direct-agent-lifetime-and-http-mcp).
+No ack tiers or timers are applied. Legacy `guard` values remain validated for config compatibility (`test/guard.test.ts`). **A hung-but-alive Pi is unguarded: Grok fails open at the hook timeout.** Stdio close covers Pi gone because the child is the agent itself. See [Failure modes](first-class-model.md#failure-modes).
 
 ## Generated media and attached images
 
@@ -279,14 +280,24 @@ Example with checks:
 - `session/load` with the stored ID occurs only when Pi attaches a stored session that this connection has not attached yet: for example, when a new Pi process resumes the session, and after a reconnect.
 - A Pi fork or tree navigation starts a new Grok session.
 - Pi sends its system prompt as `_meta.rules` and only the new user messages or tool results as the prompt.
-- If the child exits, the next turn starts a fresh child and attempts `session/load`. The turn in progress is lost. A fresh `--no-leader` child loaded the stored Grok session after a Pi restart on 2026-10-04 (`docs/launch-verification.md`).
+- If the child exits between turns, the next turn starts one fresh child and `session/load`s the stored id. Two turns that start together share that one child. A child that exits during a turn ends that turn with the exit code or signal and the last stderr lines. Send the message again.
+- If `session/load` reports that the id is missing, Pi sends `session/new`, stores the new id, and shows `[grok session <id> not found; started a new one]` once.
+- A stored id from another directory starts a new session. Grok keeps sessions under `~/.grok/sessions/<encoded-cwd>/` (`~/.grok/docs/user-guide/17-sessions.md`). Pi shows `[grok session <id> belongs to <old cwd>; started a new one]` once.
+- Escape sends `session/cancel`. If the prompt does not settle within 5 seconds, Pi kills the child. The turn ends either way.
+- A fresh `--no-leader` child loaded the stored Grok session after a Pi restart on 2026-10-04 (`docs/launch-verification.md`).
 - After you change files under `src/model/`, start a new `pi` process. `/reload` can keep the provider module that Pi already imported.
 
 ## Files and network
 
-Settings stay in `~/.pi/agent/grok-ws.json` or `PI_CODING_AGENT_DIR`. Pi session files hold the Grok session ID and display entries. Media copies stay in `.pi/grok-images/`; attached images use the system temporary directory (`src/model/session.ts`, `src/model/provider.ts`). Grok manages its own login and data under `~/.grok/`.
+Settings stay in `~/.pi/agent/grok-ws.json` or `PI_CODING_AGENT_DIR`. Pi session files hold the Grok session ID and display entries. Media copies stay in `.pi/grok-images/`; attached images use the system temporary directory (`src/model/session.ts`, `src/model/provider.ts`). Grok manages its own login and data under `~/.grok/`. Child stderr and skipped stdout frames are in the [stdio log](#stdio-log).
 
-ACP uses pipes, not TCP. Lent tools use the same pipe. Grok's external network use is managed by Grok itself (`src/model/connection.ts`).
+ACP uses pipes. Lent tools use the same pipe. Grok's external network use is managed by Grok itself (`src/model/connection.ts`).
+
+## Stdio log
+
+Child stderr and skipped stdout frames go to `<agent dir>/grok-stdio.log`. The agent dir is `PI_CODING_AGENT_DIR`, or `~/.pi/agent` when that variable is unset. Each line is `stderr: …`, `framing: skipped non-JSON stdout: …`, `exit: …`, or `spawn: …`.
+
+The file rotates at 2 MB. When the next line would start past that size, the current file is renamed to `grok-stdio.log.1` and a new log starts. One line can push the live file past 2 MB before the next rotation. `/grok debug` prints the path and the last 10 stderr lines.
 
 ## Isolation
 
@@ -300,7 +311,7 @@ npm run check        # tsc --noEmit
 npm test             # node --test test/*.test.ts, no Grok calls
 ```
 
-`test/transport.test.ts` starts real stdio children using `test/fixtures/fake-grok.ts`. It checks exact argv, child reuse/drop, signed-out retry, in-process MCP during attach, model selection, orphan hooks, slow dialogs, close-time answers, late suppression, failed attach routing, and startup failures. No real Grok is run.
+`test/transport.test.ts` starts real stdio children using `test/fixtures/fake-grok.ts`. It checks exact argv, child reuse/drop, signed-out retry, in-process MCP during attach, model selection, orphan hooks, slow dialogs, close-time answers, late suppression, failed attach routing, and startup failures. `test/hardening.test.ts` covers one failure mode per numbered case in [Failure modes](first-class-model.md#failure-modes). No real Grok is run.
 
 The unit tests cover the turn split around a lent tool call, abort and resend, prompt tail selection, display-only messages, usage mapping, tool classification and gates, `/grok perms` modes, guard tier validation, question dialogs, steering with a mocked Grok, the steer handler across a model switch, `/grok` command timeout and completion through the shared prompt lifetime, media copies, the lent tool policy and names, `/grok extensions`, `/grok login` output parsing, and context windows from Grok's model cache.
 
@@ -314,12 +325,28 @@ Live probes spend Grok usage: run only when explicitly requested. `scripts/model
 
 ## Troubleshooting
 
-| Symptom | Cause and action |
-| --- | --- |
-| Pi does not know the model `grok/grok-4.7` | The extension did not load. Use `pi -e <path-to-clone>` or `pi install <path-to-clone>`, and check the load error at startup. |
-| `Grok Build is not signed in. Run /grok login, ...` | Grok has no stored login. Run `/grok login` and approve the code, then send the message again. Pi's `/login` xAI entry does not sign in Grok Build: Grok authenticates agent sessions only with its own stored login, and `XAI_API_KEY` does not replace it. |
-| `Grok connection dropped mid-turn (…)` | The stdio agent exited. Send the message again. A new Pi process can `session/load` the stored Grok session. |
-| `No Grok session yet. Send a message first.` | `/grok plan`, `goal`, and `compact` need a Grok session. Send one prompt first. |
-| Headless Pi ends the turn after a permission prompt | The default `headlessPermissions` is `dialog`, which cancels. Set `deny`, `reads`, or `allow`. |
-| No inline image | The terminal has no image support, or `magick` is missing for a JPEG, WebP, or GIF. The path is still shown. |
-| No hashline tools | `~/.grok/config.toml` does not set `[toolset] file_toolset = "hashline"`. This is expected. |
+| Symptom | Cause | Fix |
+| --- | --- | --- |
+| The turn ends with `Grok child \`grok\` ended (exit code N)` or `(signal SIG…)`, often with `Last stderr:` | The child exited during the turn (crash, out of memory, `SIGKILL`, or Grok replacing its binary). | Send the message again. The next turn starts a new child and loads the stored Grok session. Parked lent-tool calls from that child are rejected. |
+| The next message shows `[grok reconnected after: …; session … reloaded]` | The child exited while Pi was idle. | None. The next turn starts one child. Two turns that open together share that start. |
+| `Cannot start Grok: \`…\` was not found` | `grok` is missing from `PATH`, or `PI_GROK_BINARY` names a missing file. The turn fails within 30 seconds. | Install Grok Build, or set `PI_GROK_BINARY` to the executable. |
+| `Cannot start Grok: \`…\` is not executable` | The file at `PI_GROK_BINARY` cannot be executed. | Point `PI_GROK_BINARY` at a Grok Build binary you can run. |
+| `does not provide \`agent --no-leader stdio\`` | The binary exited during startup with code 2 or a usage error. It is older than Grok Build 1.0.46, or it rejects `--no-leader`. Stderr is included in the message. | Install Grok Build 1.0.46 or newer, or set `PI_GROK_BINARY` to that executable. |
+| `Grok Build is not signed in. Run /grok login, …` | `initialize` returned no `cached_token` method, or `authenticate` failed. | Run `/grok login` and approve the code, then send the message again. Pi's `/login` xAI entry signs in a different client. `XAI_API_KEY` does not replace Grok's stored login. |
+| A `grok` process remains after Pi was killed with `SIGKILL` | Node cannot set a parent-death signal. Closing Pi's pipes is the only signal the child gets. The child exits when it stops on stdin EOF. | Kill the leftover process. A normal Pi exit, `SIGINT`, or `SIGTERM` closes stdin, then sends `SIGTERM`, then `SIGKILL`. |
+| `grok-stdio.log` contains `framing: skipped non-JSON stdout` and the turn continues | The child wrote a warning, or a partial line, on stdout. A prefix glued to the next `{"jsonrpc"` frame is skipped and the frame is kept. | None. Child stderr is in the same log. It is kept off Pi's stdout. |
+| A tool result of several megabytes pauses, then completes | `stdin.write` returned false because the pipe buffer was full. | None. The next write waits until the buffer drains. |
+| `Grok did not answer <method> within Ns. The child was stopped.` | The child missed its deadline: `initialize` and `authenticate` 30 s, `session/new` and `session/load` 60 s, `session/set_mode` and `session/set_config_option` 10 s, other requests 30 s. `session/prompt` has no deadline. | Send the message again. The child was killed. The next turn starts a new child and loads the stored session. |
+| Escape ends the turn, or the message is `Grok did not acknowledge session/cancel within 5s` | Pi sent `session/cancel`. The in-flight prompt did not settle within 5 seconds. | The turn ends either way. When the acknowledgement is missing, the child is killed. Send the message again. |
+| A thinking line `[grok session <id> not found; started a new one]` | `session/load` failed because that id is not on disk (for example `~/.grok` was removed). | None. Pi starts a new session, stores the new id, and shows the note once. A timeout or a dropped pipe does not take this path. |
+| A thinking line `[grok session <id> belongs to <cwd>; started a new one]` | The stored id was created in another directory. Grok stores each session under `~/.grok/sessions/<encoded-cwd>/<id>/`. | None. Pi starts a new session for this directory and shows the note once. |
+| A tool is denied with `No Pi session owns this Grok session; the request was answered immediately.` | A hook, permission, or question arrived for a Grok session Pi no longer owns (`/new` or the session tree). | None. Pi answers deny or cancel immediately. |
+| A hook is denied with `Malformed hook payload: …` | The payload omitted `hookEventName` or another required field, or the handler threw. | None. Pi denies that hook and returns the reason. |
+| You need the child pid, uptime, recent exits, stderr, pending requests, or MCP counts | Those values are on the live connection. | Run `/grok debug`. |
+| You need stderr or skipped frames older than the last 10 lines | `/grok debug` keeps a 10-line ring. | Open `<agent dir>/grok-stdio.log`. See [Stdio log](#stdio-log). |
+| `Grok connection dropped mid-turn (…)` | The turn failed for a reason this package does not explain with its own message. | Send the message again. The next turn starts a new child and loads the stored session. Check the [stdio log](#stdio-log). |
+| Pi does not know the model `grok/grok-4.7` | The extension did not load. | Use `pi -e <path-to-clone>` or `pi install <path-to-clone>`, and read the load error at startup. |
+| `No Grok session yet. Send a message first.` | `/grok plan`, `goal`, and `compact` need a Grok session. | Send one prompt first. |
+| Headless Pi ends the turn after a permission prompt | The default `headlessPermissions` is `dialog`, which cancels. | Set `deny`, `reads`, or `allow`. |
+| No inline image | The terminal has no image support, or `magick` is missing for a JPEG, WebP, or GIF. | The path is still shown. Install `magick` to inline JPEG, WebP, and GIF. |
+| No hashline tools | `~/.grok/config.toml` does not set `[toolset] file_toolset = "hashline"`. | This is expected until that setting is present. |

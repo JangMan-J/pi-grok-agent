@@ -114,6 +114,36 @@ Historical WebSocket-gateway runs are recorded in [launch-verification.md](launc
 - Tasks: Grok's task tools (`spawn_subagent`, `monitor`, and others) are model tools only. A `/grok tasks` command needs a listing method from Grok.
 - Pi stream hooks: call `options.onPayload` and `options.onResponse`, as Pi's custom provider guide asks.
 
+## Failure modes
+
+`test/hardening.test.ts` drives each case with `test/fixtures/fake-grok.ts`. No real Grok runs. The user-facing table is in [usage.md](usage.md#troubleshooting).
+
+These recover with no user step:
+
+- The child exits between turns. The next turn starts one child. Concurrent `open()` calls share one `opening` promise, so two turns cannot spawn two children. The stored id is loaded with `session/load`. When this Pi process had already attached, the stream shows `[grok reconnected after: …; session … reloaded]`.
+- `session/load` says the id is missing. Pi sends `session/new`, stores the new id, and shows `[grok session <id> not found; started a new one]` once. A timeout or a closed pipe does not take this path.
+- The stored id belongs to another directory. Grok stores sessions under `~/.grok/sessions/<encoded-cwd>/<id>/` (`~/.grok/docs/user-guide/17-sessions.md`). Pi starts a new session and shows `[grok session <id> belongs to <old cwd>; started a new one]` once.
+- Stdout contains a non-JSON line, a partial line, or a warning glued onto the next `{"jsonrpc"` frame. The bad text is logged and skipped. The JSON-RPC frame is kept. Child stderr goes to the stdio log, never to Pi's stdout.
+- A write fills the stdin buffer. The write waits for drain, then continues. A multi-megabyte tool result is delivered.
+- A reverse request names a Grok session Pi does not own. Pi answers deny or cancel immediately.
+- A hook payload is missing `hookEventName`, or the handler throws. Pi denies that hook with a reason.
+
+These end the current turn. The next turn starts a new child and loads the stored id. Send the message again:
+
+- The child exits during a turn. The error names the exit code or signal and the last stderr lines. Parked lent-tool calls reject.
+- A Pi-to-Grok request misses its deadline. `initialize` and `authenticate` allow 30 seconds, `session/new` and `session/load` allow 60 seconds, `session/set_mode` and `session/set_config_option` allow 10 seconds, and other requests allow 30 seconds. `session/prompt` has no deadline and stays cancellable. The child is killed.
+- Escape during a turn sends `session/cancel`. If the prompt does not settle within 5 seconds, the child is killed. The Pi turn ends either way.
+
+These need a user action. The turn fails within the initialize deadline, and the message includes stderr when the child produced any:
+
+- The binary is missing, or it is not executable. Install Grok Build, or set `PI_GROK_BINARY`.
+- The binary has no `agent --no-leader stdio` (startup exit 2, or a usage error). Install Grok Build 1.0.46 or newer.
+- Grok is signed out: `initialize` offers no `cached_token` method, or `authenticate` fails. Run `/grok login`.
+
+Two residuals stay. A hung-but-alive Pi fails open at Grok's hook timeout. An ack timer in that same hung loop would not run. Node cannot set a parent-death signal. A normal Pi exit, `SIGINT`, or `SIGTERM` closes the child's stdin, then sends `SIGTERM`, then `SIGKILL`. `SIGKILL` of Pi only closes the pipes. The child then exits if it stops on stdin EOF. A child that ignores EOF can outlive that `SIGKILL`.
+
+`/grok debug` shows the child pid, uptime, the last 3 exits, the last 10 stderr lines, the pending request count, and MCP tools lent, calls served, and calls failed. The full stderr and framing log is `<agent dir>/grok-stdio.log`, rotated at 2 MB to `grok-stdio.log.1`.
+
 ## Limits
 
 - When the prompt response carries no usage report, usage and cost are zero.
