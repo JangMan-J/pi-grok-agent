@@ -159,7 +159,7 @@ Grok's model calls a lent tool through `use_tool` with the name `pi__<name>`. Gr
 
 The Pi assistant message uses the Pi tool name. Pi executes the tool through its own loop and permission gates, and the same Grok turn continues with the result. Pi passes the complete tool result to Grok.
 
-The extension serves lent tools inside Pi at `http://127.0.0.1:<ephemeral>/mcp/<serverId>`, bound only to loopback. By default Grok POSTs MCP messages directly (`src/model/mcp-server.ts`). The temporary environment-only `PI_GROK_MCP=sdk` comparison path instead advertises the ACP SDK channel and registers an in-process server ID; it opens no HTTP listener. Both reach the same session `onMcp`. HTTP is the default we run; SDK exists for one live probe, after which exactly one path will be removed (`src/model/connection.ts`, `test/transport.test.ts`).
+Lent tools go over Grok's MCP-over-ACP channel on the same stdio pipe. `initialize` sends `_meta['x.ai/mcp/sdk']: true`. `session/new` and `session/load` send `_meta['x.ai/mcp/servers']` with the server name and id. Grok then sends each MCP JSON-RPC message as `_x.ai/mcp/sdk_call`, and `session.ts` `onMcp` answers it (`src/model/connection.ts`, `test/transport.test.ts`). Live check 2026-10-04: tools/list, `pi_echo_secret`, a 5 s held wait, and the token came back (`docs/launch-verification.md`).
 
 Grok reads the tool list once for each Grok session. If Grok has an equivalent native tool, it usually uses its own tool.
 
@@ -270,7 +270,6 @@ Example with checks:
 | `PI_GROK_POST_EDIT_CHECK` | `hooks.postEditCheck` |
 | `PI_GROK_STOP_CHECK` | `hooks.stopCheck` |
 | `PI_GROK_ACK_MS`, `PI_GROK_POLICY_MS`, `PI_GROK_CHECK_BUDGET_MS`, `PI_GROK_DIALOG_MS` | Legacy `guard` values: validated but no timers are armed |
-| `PI_GROK_MCP` | `http` (default) or `sdk`, read once by `readConfig`, no JSON setting; any other value throws. Temporary live-probe switch. |
 | `PI_GROK_BINARY` | Grok executable, read at spawn time. Default `grok`. |
 
 ## Session lifecycle
@@ -280,18 +279,18 @@ Example with checks:
 - `session/load` with the stored ID occurs only when Pi attaches a stored session that this connection has not attached yet: for example, when a new Pi process resumes the session, and after a reconnect.
 - A Pi fork or tree navigation starts a new Grok session.
 - Pi sends its system prompt as `_meta.rules` and only the new user messages or tool results as the prompt.
-- If the child exits, the next turn starts a fresh child and attempts `session/load`. The turn in progress is lost. History across fresh `--no-leader` children is unverified live.
+- If the child exits, the next turn starts a fresh child and attempts `session/load`. The turn in progress is lost. A fresh `--no-leader` child loaded the stored Grok session after a Pi restart on 2026-10-04 (`docs/launch-verification.md`).
 - After you change files under `src/model/`, start a new `pi` process. `/reload` can keep the provider module that Pi already imported.
 
 ## Files and network
 
 Settings stay in `~/.pi/agent/grok-ws.json` or `PI_CODING_AGENT_DIR`. Pi session files hold the Grok session ID and display entries. Media copies stay in `.pi/grok-images/`; attached images use the system temporary directory (`src/model/session.ts`, `src/model/provider.ts`). Grok manages its own login and data under `~/.grok/`.
 
-ACP uses pipes, not TCP. In default HTTP mode lent tools use an ephemeral loopback HTTP server; unknown server IDs return 404. Grok's external network use is managed by Grok itself (`src/model/connection.ts`, `src/model/mcp-server.ts`).
+ACP uses pipes, not TCP. Lent tools use the same pipe. Grok's external network use is managed by Grok itself (`src/model/connection.ts`).
 
 ## Isolation
 
-Use `PI_CODING_AGENT_DIR` for separate Pi settings/sessions and `PI_GROK_BINARY` to select the executable. Both are inherited at child spawn time. Each Pi owns its agent and ephemeral MCP port; there is no shared leader or leader-socket setting. These variables do not isolate Grok's login or sandbox its tools.
+Use `PI_CODING_AGENT_DIR` for separate Pi settings/sessions and `PI_GROK_BINARY` to select the executable. Both are inherited at child spawn time. Each Pi owns its agent. There is no shared leader or leader socket. These variables do not isolate Grok's login or sandbox its tools.
 
 ## Checks
 
@@ -307,7 +306,7 @@ The unit tests cover the turn split around a lent tool call, abort and resend, p
 
 ## Live probes
 
-Live probes spend Grok usage: run only when explicitly requested. `scripts/model-probe.ts` honors `PI_GROK_MCP` to test direct stdio with HTTP (default) or SDK lent tools; `scripts/reconnect-probe.ts` checks stored history after restarting Pi with the same persisted Pi session. `npm run test:live` invokes those two probes. They write `evidence/model-probe.json` and `evidence/reconnect-probe.json`; neither has been run for this implementation.
+Live probes spend Grok usage: run only when explicitly requested. `scripts/model-probe.ts` checks `_x.ai/mcp/sdk_call` for a Pi-held tool. `scripts/reconnect-probe.ts` restarts Pi and checks `session/load` of the stored Grok session. `npm run test:live` invokes those two probes. They write `evidence/model-probe.json` and `evidence/reconnect-probe.json`. Both passed on 2026-10-04 (`docs/launch-verification.md`).
 
 `scripts/client-gone-probe.ts` spawns a Grok stdio client directly and kills it with a `pre_tool_use` hook unanswered. See [launch-verification.md](launch-verification.md#client-death-probe-2026-10-04).
 
@@ -319,7 +318,7 @@ Live probes spend Grok usage: run only when explicitly requested. `scripts/model
 | --- | --- |
 | Pi does not know the model `grok/grok-4.7` | The extension did not load. Use `pi -e <path-to-clone>` or `pi install <path-to-clone>`, and check the load error at startup. |
 | `Grok Build is not signed in. Run /grok login, ...` | Grok has no stored login. Run `/grok login` and approve the code, then send the message again. Pi's `/login` xAI entry does not sign in Grok Build: Grok authenticates agent sessions only with its own stored login, and `XAI_API_KEY` does not replace it. |
-| `Grok connection dropped mid-turn (…)` | The stdio agent exited. Send the message again; history reload is unverified live. |
+| `Grok connection dropped mid-turn (…)` | The stdio agent exited. Send the message again. A new Pi process can `session/load` the stored Grok session. |
 | `No Grok session yet. Send a message first.` | `/grok plan`, `goal`, and `compact` need a Grok session. Send one prompt first. |
 | Headless Pi ends the turn after a permission prompt | The default `headlessPermissions` is `dialog`, which cancels. Set `deny`, `reads`, or `allow`. |
 | No inline image | The terminal has no image support, or `magick` is missing for a JPEG, WebP, or GIF. The path is still shown. |

@@ -25,10 +25,10 @@ Run [Grok Build](https://docs.x.ai/build/overview) as an additional model provid
 
 ```text
 Pi extension <-- ACP over stdio --> grok --permission-mode default agent --no-leader stdio
-             <-- HTTP MCP ------> 127.0.0.1:<ephemeral>/mcp/<serverId> (hosted inside Pi)
+             <-- _x.ai/mcp/sdk_call (same pipe) -->
 ```
 
-The first Grok turn starts one non-detached agent child per Pi process, not a shared leader or daemon. Loading the extension alone starts nothing. Pi uses the [Agent Client Protocol](https://agentclientprotocol.com) over stdin/stdout; Grok runs its own tools and asks Pi through hooks and dialogs. Lent Pi tools use an in-process loopback HTTP MCP server by default. The environment-only `PI_GROK_MCP=sdk` switch enables a temporary ACP MCP path for one live comparison; after that probe one path will be deleted. Other values besides `http` and `sdk` are rejected at load. Source: `src/model/connection.ts`, `src/model/mcp-server.ts`; fake-child checks: `test/transport.test.ts`. Details: [architecture](docs/architecture-diagram.md) · [usage](docs/usage.md).
+The first Grok turn starts one non-detached agent child per Pi process, not a shared leader or daemon. Loading the extension alone starts nothing. Pi uses the [Agent Client Protocol](https://agentclientprotocol.com) over stdin/stdout; Grok runs its own tools and asks Pi through hooks and dialogs. Lent Pi tools use that same pipe: Grok's MCP-over-ACP channel (`x.ai/mcp/sdk`, then `x.ai/mcp/servers`, then `_x.ai/mcp/sdk_call`). There is no gateway, port, or bearer secret. Source: `src/model/connection.ts`; fake-child checks: `test/transport.test.ts`. Details: [architecture](docs/architecture-diagram.md) · [usage](docs/usage.md).
 
 ## Function
 
@@ -57,7 +57,7 @@ Model availability in Pi is determined by your [account access](https://grok.com
 
 ## Notes
 
-- `PI_CODING_AGENT_DIR` isolates Pi settings/sessions; `PI_GROK_BINARY` selects the child executable at spawn time. No port, socket path, or shared leader needs configuration. Session history across a new `--no-leader` child is unverified live; see `scripts/reconnect-probe.ts`.
+- `PI_CODING_AGENT_DIR` isolates Pi settings/sessions; `PI_GROK_BINARY` selects the child executable at spawn time. No port, socket path, or shared leader needs configuration. A new `--no-leader` child loaded a stored Grok session after a Pi restart on 2026-10-04.
 
 - Requires the Grok Build CLI (`grok` on your `PATH`, or the path in `PI_GROK_BINARY`) and Node.js 22.19 or newer.
 - Not compatible with API key access: Grok Build accepts only its own stored login for agent sessions. A Grok account is required, any membership tier; a free account had only `grok-4.7` in the [recorded run](https://github.com/JangMan-J/pi-grok-agent/blob/main/docs/launch-verification.md). If your login expires, run `grok login` or `/login` in Grok Build, or `/grok login` in Pi, to renew it.

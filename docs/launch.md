@@ -34,7 +34,7 @@ Tracked tests versus current baseline: the tracked suite is 33 test cases in fiv
 | Grok native tools run on Grok's harness. Pi shows them as `grok-tools` batches and `grok-tool` entries and does not execute them. | Unit. Live 2026-09-28 (0 Pi tool executions, 5 Grok native). | `session.ts` `tool_call` case, `test/model.test.ts` "Grok native tool activity is observed, not executed", `scripts/model-live.sh` |
 | Hashline edits (`hashline_read`, `hashline_edit`, `hashline_grep`) | Conditional | Only when `~/.grok/config.toml` sets `[toolset] file_toolset = "hashline"`. Otherwise Grok uses `read_file` and `search_replace`. |
 | Full tool results | Qualified | Grok's model context keeps full results. Pi adds only `additionalContext` in `post_tool_use`. Pi's copies are shortened: 8000 in the `grok-tool` entry, 600 in the expanded renderer. Lent Pi tool results pass to Grok whole. |
-| Pi tools lent over in-process HTTP MCP; temporary SDK comparison switch | Unit; live stdio-direct probe pending | `src/model/mcp-server.ts`, `src/model/connection.ts`, `test/transport.test.ts`, `scripts/model-probe.ts` |
+| Pi tools lent over MCP-over-ACP (`_x.ai/mcp/sdk_call`) | Unit. Live 2026-10-04 (`model-probe`, sdk). | `src/model/connection.ts`, `test/transport.test.ts`, `scripts/model-probe.ts` |
 | Grok permission prompts as Pi dialogs, headless policy, and `/grok perms yolo` selecting allow once | Unit | `src/model/permissions.ts`, `test/permissions.test.ts`, `headlessPermissions` in `src/config.ts` |
 | Pi gates Grok tools (`pre_tool_use`), post-edit check, stop check | Unit. Live 2026-09-28 (`hooks-live` 3/3, `hooks-probe`). | `test/hooks.test.ts`, `scripts/hooks-live.sh` |
 | `/grok perms yolo, auto, ask, read-only` | Unit | `test/hooks.test.ts` "/grok perms" tests; `test/permissions.test.ts` for allow once on `session/request_permission` |
@@ -46,7 +46,7 @@ Tracked tests versus current baseline: the tracked suite is 33 test cases in fiv
 | Images attached in Pi reach Grok | Unit | Written to a temp file and passed by path. `test/hooks.test.ts` "inbound image blocks" |
 | Mid-turn Enter steers into Grok's running turn (`_x.ai/interject`), Alt+Enter queues a follow-up | Unit only. Live effect, evidence absent. | `src/model/steer.ts`, `test/steer.test.ts`, `test/extension.test.ts` (the registered handler ignores steers while another model is active). `docs/first-class-model.md` has two live notes that do not agree. |
 | `/grok goal` and `/grok compact` share the normal prompt lifetime; a timeout cancels on Grok and frees the session | Unit | `test/model.test.ts` "/grok command" tests |
-| Load a stored session after Pi restart | Source; live check pending | `src/model/connection.ts`, `scripts/reconnect-probe.ts` |
+| Load a stored session after Pi restart | Live 2026-10-04 (`reconnect-probe`) | `src/model/connection.ts`, `scripts/reconnect-probe.ts` |
 | Usage and cost from Grok's own report | Unit | `test/model.test.ts` "usage" tests |
 
 Known compatibility gap: the stream does not call `options.onPayload` or `options.onResponse` from Pi's custom-provider contract.
@@ -59,7 +59,7 @@ Facts for the README and every post:
 
 - Pi packages run with the user's permissions (Pi `docs/packages.md`).
 - Grok runs as the operating-system user. Its session directory is not a sandbox.
-- ACP uses stdio pipes to one non-detached agent child. Default HTTP MCP binds to ephemeral IPv4 loopback (`src/model/connection.ts`, `src/model/mcp-server.ts`).
+- ACP uses stdio pipes to one non-detached agent child. Lent tools use `_x.ai/mcp/sdk_call` on that pipe (`src/model/connection.ts`).
 - The child uses default permission mode, never `--always-approve`, and forces `GROK_DISABLE_AUTOUPDATER=1`.
 - Grok usage counts against the user's Grok account.
 
@@ -173,7 +173,7 @@ Post in `github.com/earendil-works/pi/discussions` only if a category for commun
 
 Body: the Discord text, plus:
 
-- How it works: Pi's system prompt goes as `_meta.rules`, and only new messages go as `session/prompt`. Grok tool calls come back as ACP updates. Lent Pi tools use an in-process HTTP MCP server by default.
+- How it works: Pi's system prompt goes as `_meta.rules`, and only new messages go as `session/prompt`. Grok tool calls come back as ACP updates. Lent Pi tools use `_x.ai/mcp/sdk_call` on the same pipe.
 - Open questions for Pi maintainers: `onPayload` and `onResponse` are not called yet. Is there a better Pi surface for provider-native tool records than custom entries?
 - Feedback template: section 8.
 
@@ -201,7 +201,7 @@ Read the subreddit rules first. It limits self-promotion. Lead with the use case
 
 One post and one reply. Attach the demo clip.
 
-> `pi --model grok/grok-4.7`: Grok Build runs its own harness and tools, and Pi drives the session. Pi records every Grok tool call, can deny edits in read-only mode, and shows Grok's permission prompts as dialogs. Direct stdio, loopback HTTP MCP. {repo URL}
+> `pi --model grok/grok-4.7`: Grok Build runs its own harness and tools, and Pi drives the session. Pi records every Grok tool call, can deny edits in read-only mode, and shows Grok's permission prompts as dialogs. Direct stdio. {repo URL}
 
 Reply with one technical detail: Grok 1.0.41 drops MCP `annotations`, so read-only hints for lent tools go in `_meta`.
 

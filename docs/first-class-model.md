@@ -1,6 +1,6 @@
 # Grok Build as a Pi model: design
 
-Version 0.1.8. This page describes the implemented design. For use and settings, see the [README](../README.md) and [usage.md](usage.md).
+Version 0.2.0. This page describes the implemented design. For use and settings, see the [README](../README.md) and [usage.md](usage.md).
 
 Goal: `pi --model grok/<id>`, and any Pi caller that selects a model by ID, uses Grok Build as the model.
 Grok runs each turn on its own harness. Its native tools, permission rules, subagents, compaction, and history stay on the Grok side.
@@ -19,7 +19,7 @@ Reason: a Grok Build agent session includes Grok's tool harness. A plain complet
 | File edit scheme | Grok configuration | `[toolset] file_toolset = "hashline"` in `~/.grok/config.toml` selects `hashline_read`, `hashline_edit`, `hashline_grep`. Otherwise Grok uses its default file tools. | Grok Build configuration, not this repository |
 | Permissions | Grok asks, Pi answers | `session/request_permission` becomes a Pi selection dialog. Headless Pi uses `headlessPermissions`. | `src/model/permissions.ts` |
 | Questions | Grok asks, Pi answers | `_x.ai/ask_user_question` becomes one Pi dialog for each question. | `src/model/questions.ts` |
-| Lent Pi tools | Optional | Default: in-process HTTP MCP on `127.0.0.1:<ephemeral>/mcp/<serverId>`. Temporary `PI_GROK_MCP=sdk` path exists for one live probe. | `src/model/mcp-server.ts`, `src/model/session.ts` `onMcp`, `test/transport.test.ts` |
+| Lent Pi tools | Optional | MCP-over-ACP on the stdio pipe: `x.ai/mcp/sdk`, `x.ai/mcp/servers`, `_x.ai/mcp/sdk_call`. | `src/model/connection.ts`, `src/model/session.ts` `onMcp`, `test/transport.test.ts` |
 | Output | Provider | Agent chunks become `text_delta`. Thought chunks become `thinking_delta`. | `src/model/provider.ts` |
 | Gate | Pi hook | `pre_tool_use`: `denyGrokTools` first, then `allowGrokTools`, then the capability mirror classified by Grok's `x.ai/tool` stamp, with `mcpReadOnlyServers` for MCP tools. `/grok perms` sets the mirrored capabilities (`yolo` adds edit, write, and shell), so a deny entry wins in every mode. Grok's own `grokMode` and permission prompts are separate. | `src/model/hooks.ts` `capabilityGate`, `src/model/session.ts` |
 | Guard | Pi process | One answer per hook, permission, or question; fail-closed on orderly close; late answers suppressed. No timers or ack tiers. | `src/model/guard.ts`, `test/transport.test.ts` |
@@ -33,7 +33,7 @@ Reason: a Grok Build agent session includes Grok's tool harness. A plain complet
 
 1. Pi calls `streamSimple(model, context)`.
 2. The provider renders Grok rules from Pi's system prompt by removing Pi's own harness catalog/rule/doc sections, then adding a short bridge instruction that Grok should use its native tools, with a list of the lent Pi tools under the `pi__<name>` names that `use_tool` accepts.
-3. First call for a Pi session: `session/new`. Later calls on the same connection reuse the attached session with no request. `session/load` of the stored Grok session occurs only on attach to a connection that has not attached it yet, for example in a new Pi process or after a reconnect. Grok's session guide says clients can load a previous session by ID (`~/.grok/docs/user-guide/17-sessions.md`). That `--no-leader` reload is still an unverified live check.
+3. First call for a Pi session: `session/new`. Later calls on the same connection reuse the attached session with no request. `session/load` of the stored Grok session occurs only on attach to a connection that has not attached it yet, for example in a new Pi process or after a reconnect. Grok's session guide says clients can load a previous session by ID (`~/.grok/docs/user-guide/17-sessions.md`). A fresh `--no-leader` child did that on 2026-10-04 (`docs/launch-verification.md`).
 4. If a lent Pi tool call is waiting, the newest tool-result message answers it and the Grok turn continues.
 5. Otherwise the new user messages go out as `session/prompt`.
 6. Text and thoughts stream as Pi events. Native tool activity stays out of assistant thinking; routine completions render as `grok-tools` batch rows (leftovers flush at turn end), the interesting ones as `grok-tool` rows.
@@ -76,19 +76,17 @@ and maps the call back. The connection routes MCP messages by server ID, not by 
 `tools/list` that arrives while `session/new` is still pending reaches Pi (`test/transport.test.ts`, with the
 fake Grok). Whether the real Grok lists tools before `session/new` returns is unverified. Grok chooses between its own tools and any lent ones.
 
-## Direct agent lifetime and HTTP MCP
+## Direct agent and MCP-over-ACP
 
-Grok Build 1.0.46's user guide documents `grok agent stdio` as the local ACP integration path for custom tools and ACP SDKs (`~/.grok/docs/user-guide/15-agent-mode.md`, section "stdio transport"). This package follows that path (`src/model/connection.ts`): one non-detached child, `grok --permission-mode default agent --no-leader stdio`. The guide's example passes `--always-approve`; this child does not. The child env sets `GROK_DISABLE_AUTOUPDATER=1`. The same release's headless guide says SDKs inject that for the non-leader agents they spawn (`~/.grok/docs/user-guide/14-headless-mode.md`). There is no leader supervision, lock file, or shared agent. `drop()` ends this child; the next `open()` starts another. A new Pi process resumes a stored Grok ID with `session/load`. Sessions are persisted on disk under `~/.grok` regardless of transport (the harness analysis calls this “notes in a filing cabinet”). The session guide says the agent persists session updates and that clients can reconnect and load previous sessions by ID, independent of transport (`~/.grok/docs/user-guide/17-sessions.md`). Whether a fresh `--no-leader` child still has that history after a Pi restart is an **unverified live check** (`scripts/reconnect-probe.ts`).
+Grok Build 1.0.46's user guide documents `grok agent stdio` as the local ACP integration path for custom tools and ACP SDKs (`~/.grok/docs/user-guide/15-agent-mode.md`, section "stdio transport"). This package follows that path (`src/model/connection.ts`): one non-detached child, `grok --permission-mode default agent --no-leader stdio`. The guide's example passes `--always-approve`; this child does not. The child env sets `GROK_DISABLE_AUTOUPDATER=1`. The same release's headless guide says SDKs inject that for the non-leader agents they spawn (`~/.grok/docs/user-guide/14-headless-mode.md`). There is no leader supervision, lock file, or shared agent. `drop()` ends this child; the next `open()` starts another.
 
-Grok's MCP client POSTs directly to the in-process HTTP server. Routes are registered before `session/new` or `session/load`. GET gets 405, unknown IDs get 404, anonymous `{}` gets 400 rather than an authentication challenge. In the default HTTP mode, no `x.ai/mcp/sdk` advertisement or `x.ai/mcp/servers` metadata is sent (`src/model/mcp-server.ts`, `test/transport.test.ts`).
+Lent tools use Grok's MCP-over-ACP channel on that pipe: `initialize` `_meta['x.ai/mcp/sdk']`, then `session/new` or `session/load` `_meta['x.ai/mcp/servers']`, then agent-to-client `_x.ai/mcp/sdk_call`. The call is one MCP JSON-RPC message, and `session.ts` `onMcp` answers it. A shared leader in Grok 1.0.41 could not route `sdk_call`: the channel is half-duplex and single-connection, so the leader cannot tell which client owns the in-process server. With one `--no-leader` agent per Pi, that client is the only one. Live 2026-10-04, Grok 1.0.46, Pi 1.0.2, Node 26.10, commit `7c26faa`: `scripts/model-probe.ts` listed tools, called `pi_echo_secret`, held 5 s, and returned the token with `end_turn` (`docs/launch-verification.md`).
 
-HTTP is what we run. `PI_GROK_MCP=sdk` exists only for one Manager live probe; after that probe **exactly one of these two paths is deleted**. `readConfig` reads this environment-only switch once (`http` by default, `sdk` allowed, any other value throws); `model.ts` passes it to the connection. SDK mode advertises initialize `_meta: { "x.ai/mcp/sdk": true }`, registers `_meta["x.ai/mcp/servers"]: [{ name, serverId }]` on session/new and session/load, and opens no HTTP server. Both modes retain `mcpConfig` tool timeouts. The always-registered `_x.ai/mcp/sdk_call` ACP handler dispatches to the same session `onMcp` and wraps its result or -32603 error (`src/model/connection.ts`, `test/transport.test.ts`).
-
-Why the former shared leader could not route the SDK channel: the connection could not identify which client owned an in-process MCP server. MCP-over-ACP is half-duplex: initialize `x.ai/mcp/sdk`, session/new `x.ai/mcp/servers`, then agent-to-client `x.ai/mcp/sdk_call`. Source analysis: `~/.pi/agent/parallelized/results/20261004-192859-ksys7a.md`, consistent with Grok's user guide. This is harness analysis, **not a new live result**.
+A new Pi process resumes a stored Grok ID with `session/load`. Sessions are persisted on disk under `~/.grok` regardless of transport (the harness analysis calls this “notes in a filing cabinet”). The session guide says the agent persists session updates and that clients can reconnect and load previous sessions by ID (`~/.grok/docs/user-guide/17-sessions.md`). The same live run recalled a token through a fresh `--no-leader` child after Pi restarted, with the same Grok session id.
 
 The guard watches reverse requests before the ACP SDK receives them. Orderly `close()` or `drop()` writes one fail-closed answer to child stdin, then ends the child; later handler answers are dropped. Legacy `guard` settings remain validated by `resolveGuard` but ack tiers are not applied. **A hung-but-alive Pi is unguarded**: Grok fails open when its hook times out. A timer in the same hung event loop would not run. Stdio close/process death covers Pi gone only because this child **is the agent**, not a bridge to an independently running leader. The same harness analysis (`~/.pi/agent/parallelized/results/20261004-192859-ksys7a.md`) distinguishes deployment lifetimes: stdio ACP has pipe lifetime; a leader is long-lived until update or shutdown; WebSocket serve can outlive a client reconnect. Pipe lifetime explains why a dead Pi stops its agent and why a hung-but-alive Pi is still unguarded.
 
-Manager's 2026-10-04 probe reported that killing a shared-leader client left a tool running at the 10-second hook timeout, whereas killing the `--no-leader` agent mid-hook left no tool execution or Grok process. Reported versions: Grok 1.0.46, Pi 1.0.2, Node 26.10.0; source evidence: `evidence/client-gone-probe-kill*.json`. Those files are not present in this checkout, so the report is **unverified here**, not a new live result from this implementation. End-to-end stdio-direct live probes remain pending with the Manager.
+The client-death probe on 2026-10-04 is recorded in [launch-verification.md](launch-verification.md#client-death-probe-2026-10-04). A shared leader ran the tool after the client was killed. The `--no-leader` agent did not, and no Grok process remained.
 
 ## Permission prompts
 
@@ -106,14 +104,13 @@ The registered `input` handler acts only while the active model's provider is `g
 
 ## Development record
 
-Historical WebSocket-gateway runs are recorded in [launch-verification.md](launch-verification.md). They are not evidence for stdio-direct. Obsolete gateway probe scripts exit 2; `scripts/model-probe.ts` and `scripts/reconnect-probe.ts` are adapted, but have not been run for this implementation.
+Historical WebSocket-gateway runs are recorded in [launch-verification.md](launch-verification.md). They are not evidence for stdio-direct. The 2026-10-04 stdio probes on that page are. Obsolete gateway probe scripts exit 2.
 
 ## Open items
 
 - Steering: verify the live effect of an interjection on the running turn.
 - Pi skills under the Grok model: Pi expands `/skill:x` into the user message, and Grok receives it as plain text. Grok lists the skills in the shared `.agents/skills` directories itself. Pi's catalog entry (name, description, and `SKILL.md` path) for each skill outside them, such as one a Pi package ships, goes to Grok in the rules, and Grok reads a skill file with its own file tool. Grok must translate Pi tool names such as `edit` and `bash` to its own tools. Not yet checked live. Earlier live checks ran with `--no-skills`.
 - Media: probe `image_edit` and the video result types. Video shows as a path only.
-- Session history: verify `session/load` across new `--no-leader` children with the restart probe.
 - Tasks: Grok's task tools (`spawn_subagent`, `monitor`, and others) are model tools only. A `/grok tasks` command needs a listing method from Grok.
 - Pi stream hooks: call `options.onPayload` and `options.onResponse`, as Pi's custom provider guide asks.
 

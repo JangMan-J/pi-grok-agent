@@ -1,4 +1,4 @@
-> Historical record: these results describe the WebSocket gateway removed by stdio-direct. They are not evidence for the current stdio child transport. No new live results are claimed here.
+> The 2026-09-28 sections describe the WebSocket gateway this branch removed. They are not evidence for the stdio child. The 2026-10-04 sections are.
 
 # Launch verification
 
@@ -14,6 +14,16 @@ Grok Build 1.0.46 (2765805b9442), Pi 1.0.2, Node 26.10.0. `scripts/client-gone-p
 | `grok agent --no-leader stdio` (agent is the client process) | The tool never ran. Grok had issued the `tool_call`; the marker did not appear in 25 s, and no Grok process was left behind. |
 
 Consequence: under a shared leader, Pi's death does not stop a pending tool, so the gateway's `ReverseRequestGuard` is what makes hooks fail closed. Without a leader, process lifetime does the same job. A hung but alive client is unguarded in both cases unless something outside it answers before Grok's hook timeout.
+
+## stdio-direct probes, 2026-10-04
+
+Grok Build 1.0.46, Pi 1.0.2, Node 26.10. Commit `7c26faa`. One `--no-leader` stdio child. Lent tools over `_x.ai/mcp/sdk_call`. The same day, `PI_GROK_MCP=http` also passed the model probe; that HTTP server was removed after this run.
+
+| Command | Outcome |
+| --- | --- |
+| `node scripts/model-probe.ts` with the sdk path | Pass. `tools/list`, `pi_echo_secret` called, 5 s held wait, token returned, `end_turn`. |
+| `node scripts/reconnect-probe.ts` | Pass. Turn 2 recalled the token. The Grok session id was unchanged. The `--no-leader` child exited with each Pi. |
+| Interactive Pi on this commit | One `--no-leader` child per Pi. The stop hook ran over the pipe. Usage and context were reported. |
 
 ## Run 2026-09-28
 

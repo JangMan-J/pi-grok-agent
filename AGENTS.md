@@ -11,11 +11,11 @@ Scripts are in `package.json`. Run `npm install` once before any check. The `pi`
 - `npm run check`: type check (`tsc --noEmit`).
 - `npm test`: unit tests plus `test/transport.test.ts`, which starts the real connection against `test/fixtures/fake-grok.ts`. Nothing contacts Grok.
 - `npm pack --dry-run`: the `files` list in `package.json` decides the tarball. Keep `evidence/`, `test/`, and the probe scripts out of it.
-- Live probes use the current Grok login and spend usage: run only when the user asks. `scripts/model-probe.ts` and `scripts/reconnect-probe.ts` are adapted for stdio-direct, with live results still pending. Obsolete gateway probes exit 2. `npm run test:live` runs the two adapted probes. Results go to ignored `evidence/`; keep the tracked demo video until a release points elsewhere.
+- Live probes use the current Grok login and spend usage: run only when the user asks. `scripts/model-probe.ts` and `scripts/reconnect-probe.ts` passed on `7c26faa` (Grok 1.0.46, Pi 1.0.2, Node 26.10); see `docs/launch-verification.md`. Obsolete gateway probes exit 2. `npm run test:live` runs the two adapted probes. Results go to ignored `evidence/`; keep the tracked demo video until a release points elsewhere.
 
 ## Child ownership
 
-`src/model/connection.ts` starts one non-detached `grok --permission-mode default agent --no-leader stdio` child per connection. No leader, daemon, fixed ACP port, or secret file. `drop()` and `close()` end only that child. `PI_GROK_BINARY` and `PI_CODING_AGENT_DIR` are inherited at spawn time. Loading the extension must not spawn Grok. Child env forces `GROK_DISABLE_AUTOUPDATER=1`. `PI_GROK_MCP` is read once by `readConfig`: HTTP is the default; SDK is temporary for one live comparison, after which one path must be removed.
+`src/model/connection.ts` starts one non-detached `grok --permission-mode default agent --no-leader stdio` child per connection. No leader, daemon, fixed ACP port, or secret file. `drop()` and `close()` end only that child. `PI_GROK_BINARY` and `PI_CODING_AGENT_DIR` are inherited at spawn time. Loading the extension must not spawn Grok. Child env forces `GROK_DISABLE_AUTOUPDATER=1`. Lent tools use MCP-over-ACP on that pipe (`x.ai/mcp/sdk`, `x.ai/mcp/servers`, `_x.ai/mcp/sdk_call`).
 
 ## Architecture
 
@@ -30,7 +30,6 @@ Scripts are in `package.json`. Run `npm install` once before any check. The `pi`
 | `src/model/steer.ts` | Mid-turn Enter to `_x.ai/interject` |
 | `src/config.ts` | `~/.pi/agent/grok-ws.json`, environment overrides, legacy guard validation (no timers applied) |
 | `src/login.ts` | `/grok login`: runs `grok login --device-auth`, parses the URL and code. Grok stores the credential; Pi stores nothing. A signed-out Grok offers no `cached_token` method, and `connection.ts` then drops the connection with a pointer to `/grok login` |
-| `src/model/mcp-server.ts` | In-process HTTP MCP on ephemeral IPv4 loopback, routed by server ID |
 | `src/model/guard.ts` | One guarded lifetime per reverse request, fail-closed answers on orderly close and late-answer suppression; no ack tiers |
 
 
