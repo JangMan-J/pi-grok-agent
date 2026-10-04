@@ -223,6 +223,36 @@ process.stdin.on('end', () => process.exit(0));`);
   }
 });
 
+test('a drop while attach resolves cannot mark the replacement generation as loaded', async () => {
+  const loaded: (string | undefined)[] = [];
+  const connection = {
+    generation: 0, isOpen: true,
+    async attachSession(input: { sessionId?: string }) {
+      loaded.push(input.sessionId);
+      if (loaded.length === 1) this.generation++; // drop between the reply and attach's continuation
+      return { sessionId: 'stored', response: {} };
+    },
+  };
+  const session = new GrokModelSession(connection as unknown as GrokModelConnection, 'generation', '/repo');
+  await session.attach(undefined);
+  await session.attach(undefined);
+  await session.attach(undefined);
+  assert.deepEqual(loaded, [undefined, 'stored']);
+});
+
+test('old-child stderr callbacks cannot pollute the replacement child ring', async (t) => {
+  const s = setup(t, {}, { FAKE_GROK_STDERR: 'current-child' });
+  await s.connection.open();
+  const old = (s.connection as any).child;
+  s.connection.drop('replace');
+  await s.connection.open();
+  // Deliver the stale callback deterministically after the replacement has started.
+  old.stderr.emit('data', 'old-child-late-stderr\n');
+  const debug = s.connection.debugLines().join('\n');
+  assert.match(debug, /child stderr: current-child/);
+  assert.doesNotMatch(debug, /old-child-late-stderr/);
+});
+
 test('leash event debug retains the last five timestamps, counts late replies, and records child status', async (t) => {
   const s = setup(t, {}, { FAKE_GROK_DIE_ON: 'test/die', FAKE_GROK_EXIT_CODE: '23' });
   await s.connection.open();

@@ -32,6 +32,7 @@ export type ConnectionOptions = {
   heartbeatMs?: number;
 };
 type AgentChild = ChildProcessByStdio<Writable, Readable, Readable>;
+type ChildStderr = { ring: string[]; partial: string };
 
 export type McpToolDefinition = { name: string; description: string; inputSchema: Record<string, unknown> };
 export type McpToolResult = { content: { type: 'text'; text: string }[] | { type: 'image'; data: string; mimeType: string }[] | ({ type: 'text'; text: string } | { type: 'image'; data: string; mimeType: string })[]; isError?: boolean };
@@ -76,11 +77,9 @@ export class GrokModelConnection {
   private readonly servers = new Map<string, SessionHandlers>();
   private opening?: Promise<void>;
   private closed = false;
-  private ready = false;
   private readonly options: ConnectionOptions;
   private readonly dropListeners = new Set<(reason: string) => void>();
-  private readonly stderrRing: string[] = [];
-  private stderrPartial = '';
+  private stderr: ChildStderr = { ring: [], partial: '' };
   private readonly exitHistory: ChildExitRecord[] = [];
   private startedAt?: number;
   private pending = 0;
@@ -142,7 +141,7 @@ export class GrokModelConnection {
       `child pid: ${this.pid ?? '(not running)'}`,
       `child uptime: ${uptime ?? '(not running)'}`,
       `child exits: ${this.exitHistory.length ? this.exitHistory.map(formatExitRecord).join('; ') : 'none'}`,
-      `child stderr: ${this.stderrRing.length ? this.stderrRing.join('\n') : 'none'}`,
+      `child stderr: ${this.stderr.ring.length ? this.stderr.ring.join('\n') : 'none'}`,
       `pending requests: ${this.pending}`,
       `mcp: ${this.mcpStats.toolsLent} tools lent, ${this.mcpStats.callsServed} calls served, ${this.mcpStats.callsFailed} calls failed`,
       `stdio log: ${this.logPath}`,
@@ -157,7 +156,6 @@ export class GrokModelConnection {
     this.child = undefined;
     this.endChild = undefined;
     this.initialized = undefined;
-    this.ready = false;
     this.startedAt = undefined;
     this.generation++;
   }
@@ -169,26 +167,24 @@ export class GrokModelConnection {
     try { appendStdioLog(this.logPath, line, this.logMaxBytes); } catch { /* a log failure must not fail the turn */ }
   }
 
-  private keepStderr(line: string) {
-    if (this.stderrRing.length >= 10) this.stderrRing.shift();
-    this.stderrRing.push(line);
+  private keepStderr(state: ChildStderr, line: string) {
+    if (state.ring.length >= 10) state.ring.shift();
+    state.ring.push(line);
     this.writeLog(`stderr: ${line}`);
   }
 
-  private pushStderr(text: string) {
-    this.stderrPartial += text;
-    const parts = this.stderrPartial.split('\n');
-    this.stderrPartial = parts.pop() ?? '';
-    for (const line of parts) if (line.length) this.keepStderr(line);
+  private pushStderr(state: ChildStderr, text: string) {
+    state.partial += text;
+    const parts = state.partial.split('\n');
+    state.partial = parts.pop() ?? '';
+    for (const line of parts) if (line.length) this.keepStderr(state, line);
   }
 
-  private flushStderr() {
-    if (!this.stderrPartial) return;
-    this.keepStderr(this.stderrPartial);
-    this.stderrPartial = '';
+  private flushStderr(state: ChildStderr) {
+    if (!state.partial) return;
+    this.keepStderr(state, state.partial);
+    state.partial = '';
   }
-
-  private stderrText(): string { return this.stderrRing.join('\n'); }
 
   private recordExit(code: number | null, signal: NodeJS.Signals | null) {
     this.exitHistory.push({ at: new Date().toISOString(), code, signal });
@@ -237,8 +233,10 @@ export class GrokModelConnection {
     signal?.throwIfAborted();
     this.opening = (async () => {
       const binary = this.binary;
-      this.stderrRing.length = 0;
-      this.stderrPartial = '';
+      // Exit/stderr callbacks from a dropping child must not mutate its replacement's ring.
+      const stderr = this.stderr = { ring: [], partial: '' } as ChildStderr;
+      const stderrText = () => stderr.ring.join('\n');
+      let ready = false;
       const leash = this.leashPath = this.resolveLeash();
       this.leashInfo = undefined;
       const guarded = leash !== 'none';
@@ -286,11 +284,11 @@ export class GrokModelConnection {
         if (this.child === child) this.drop(why);
       };
       child.stderr.setEncoding('utf8');
-      child.stderr.on('data', (chunk: string) => this.pushStderr(chunk));
+      child.stderr.on('data', (chunk: string) => this.pushStderr(stderr, chunk));
       child.stderr.on('error', () => {});
       child.stdout.on('error', () => {});
       child.once('error', (error) => {
-        const detail = guarded ? leashStartMessage(leash, error.message, this.stderrText()) : spawnFailureMessage(binary, error, this.stderrText());
+        const detail = guarded ? leashStartMessage(leash, error.message, stderrText()) : spawnFailureMessage(binary, error, stderrText());
         this.writeLog(`spawn: ${detail}`);
         finishEnd(detail);
         fail(detail);
@@ -300,10 +298,10 @@ export class GrokModelConnection {
         setTimeout(() => {
           const exit = grokExit ?? { code, signal };
           this.recordExit(exit.code, exit.signal);
-          this.flushStderr();
+          this.flushStderr(stderr);
           const detail = leashFailure ?? (!sawReady
-            ? leashStartMessage(leash, `exited before ready (code ${code}, signal ${signal})`, this.stderrText())
-            : childExitMessage(binary, exit.code, exit.signal, this.stderrText(), this.ready ? 'running' : 'startup'));
+            ? leashStartMessage(leash, `exited before ready (code ${code}, signal ${signal})`, stderrText())
+            : childExitMessage(binary, exit.code, exit.signal, stderrText(), ready ? 'running' : 'startup'));
           this.writeLog(`exit: ${detail.split('\n')[0]}`);
           finishEnd(detail);
           fail(detail);
@@ -324,7 +322,7 @@ export class GrokModelConnection {
           if (message?.jsonrpc !== '2.0' || message?.method !== 'pi/leash' || 'id' in message || p?.event !== 'ready' ||
             typeof p.version !== 'string' || !Number.isInteger(p.grokPid) || !(p.grokPid > 0) ||
             !Number.isFinite(p.stallMs) || !(p.stallMs > 0) || !Number.isFinite(p.requestMs) || !(p.requestMs > 0)) {
-            fail(leashStartMessage(leash, 'first stdout line was not a valid ready notification', this.stderrText()));
+            fail(leashStartMessage(leash, 'first stdout line was not a valid ready notification', stderrText()));
             return;
           }
           sawReady = true;
@@ -408,7 +406,7 @@ export class GrokModelConnection {
           })
           .connect(intercepted);
         await Promise.race([ended, leashReady, new Promise<never>((_, reject) => {
-          readyTimer = setTimeout(() => { this.flushStderr(); reject(new Error(leashStartMessage(leash, `no ready notification within ${this.options.readyMs ?? 10_000} ms`, this.stderrText()))); }, this.options.readyMs ?? 10_000);
+          readyTimer = setTimeout(() => { this.flushStderr(stderr); reject(new Error(leashStartMessage(leash, `no ready notification within ${this.options.readyMs ?? 10_000} ms`, stderrText()))); }, this.options.readyMs ?? 10_000);
         })]);
         clearTimeout(readyTimer);
         const agent = this.connection.agent as unknown as { request: (method: string, params?: unknown) => Promise<unknown> };
@@ -434,7 +432,7 @@ export class GrokModelConnection {
           this.drop(SIGNED_OUT_MESSAGE);
           throw new Error(SIGNED_OUT_MESSAGE);
         }
-        this.ready = true;
+        ready = true;
         // The signal aborts startup only. A later Escape cancels the turn; it must not drop this child here.
         signal?.removeEventListener('abort', abort);
       } catch (error) {

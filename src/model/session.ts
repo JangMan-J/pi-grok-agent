@@ -164,6 +164,9 @@ export class GrokModelSession {
       if (this.activePrompt) { this.activePrompt = undefined; this.rejectParked('Grok connection dropped; the turn was lost.'); }
       this.reconnected = this.connection.lastDrop ?? 'reconnected';
     }
+    // A drop can occur after the reply but before this await resumes. Remember the
+    // generation that actually received the attach, never a newly spawned child's generation.
+    const generation = this.connection.generation;
     const attached = await this.connection.attachSession({
       sessionId: this.grokSessionId, cwd: this.cwd, serverId: this.serverId, serverName: PI_MCP_SERVER_NAME, rules,
       offerPiTools: this.tools.length > 0, grokMode: this.grokMode,
@@ -175,7 +178,7 @@ export class GrokModelSession {
       this.notice = missingSessionNote(attached.replacedSessionId);
     }
     this.grokSessionId = sessionId;
-    this.attachedGeneration = this.connection.generation;
+    this.attachedGeneration = generation;
     // Grok reports the session's model and the models this account may use as the `model` config option.
     const modelOption = ((response as { configOptions?: { id?: string; currentValue?: string; options?: { value?: string }[] }[] }).configOptions ?? []).find((o) => o.id === 'model');
     if (modelOption) {
