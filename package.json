@@ -85,6 +85,7 @@
   },
   "scripts": {
     "test": "node --test test/*.test.ts",
+    "test:leash-real": "if [ -f bin/pi-grok-leash ]; then PI_GROK_LEASH=\"$PWD/bin/pi-grok-leash\" node --test test/leash.test.ts; else echo 'SKIP: bin/pi-grok-leash is absent; run npm run build:leash'; fi",
     "check": "tsc --noEmit",
     "build:leash": "cd leash && cargo build --release && mkdir -p ../bin && cp target/release/pi-grok-leash ../bin/",
     "test:live": "node scripts/model-probe.ts && node scripts/reconnect-probe.ts"

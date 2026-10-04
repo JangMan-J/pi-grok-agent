@@ -13,25 +13,34 @@ if (args.length === 1 && args[0] === '--version') {
   process.exit(0);
 }
 function usage(): never {
-  console.error('usage: fake-leash.ts --parent <pid> [--stall-ms N] [--request-ms N] [--log <path>] -- <cmd> <args...>');
+  console.error('usage: pi-grok-leash --parent <pid> [--stall-ms 1000] [--request-ms 25000] [--log <path>] -- <grok> <args...> | --version');
   process.exit(2);
 }
-let parent = 0, stallMs = 1000, requestMs = 25000;
+let parent = 0, stallMs = 1000n, requestMs = 25000n;
+const U64_MAX = (1n << 64n) - 1n;
+// Node 22.19+ preserves primitive source tokens without a second JSON parser.
+const rawJSON = (JSON as typeof JSON & { rawJSON(text: string): unknown }).rawJSON;
+const wireMs = (ms: bigint) => rawJSON(ms.toString());
 let log = process.env.PI_GROK_LEASH_LOG;
+const trace = process.env.FAKE_LEASH_TRACE;
+function recordTrace(row: unknown) {
+  if (trace) appendFileSync(trace, JSON.stringify(row) + '\n');
+}
 let i = 0;
 for (; i < args.length && args[i] !== '--'; i += 2) {
   const flag = args[i], value = args[i + 1];
-  if (!value || value.startsWith('--')) usage();
+  if (!value) usage();
   if (flag === '--log') { log = value; continue; }
-  if (!['--parent', '--stall-ms', '--request-ms'].includes(flag)) usage();
-  if (!/^\d+$/.test(value) || !Number.isSafeInteger(Number(value)) || Number(value) <= 0) usage();
-  if (flag === '--parent') parent = Number(value);
-  else if (flag === '--stall-ms') stallMs = Number(value);
-  else requestMs = Number(value);
+  if (!['--parent', '--stall-ms', '--request-ms'].includes(flag) || !/^\+?\d+$/.test(value)) usage();
+  const number = BigInt(value);
+  if (number <= 0n || number > (flag === '--parent' ? 2147483647n : U64_MAX)) usage();
+  if (flag === '--parent') parent = Number(number);
+  else if (flag === '--stall-ms') stallMs = number;
+  else requestMs = number;
 }
 if (!parent || args[i] !== '--' || !args[i + 1]) usage();
 if (process.ppid !== parent) process.exit(3);
-if (log) appendFileSync(log, JSON.stringify({ event: 'argv', argv: args }) + '\n');
+recordTrace({ event: 'argv', argv: args });
 
 // Keep the original bytes, including CRLF and any unterminated final fragment.
 async function* lines(stream: Readable) {
@@ -64,22 +73,67 @@ const child = spawn(args[i + 1], args.slice(i + 2), {
 });
 try { await once(child, 'spawn'); }
 catch (error) { console.error(String(error)); process.exit(1); }
+if (log) appendFileSync(log, JSON.stringify({ event: 'start', parent, args: args.slice(i + 1) }) + '\n');
 const childExit = new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((resolve) => {
   child.once('exit', (code, signal) => resolve({ code, signal }));
 });
 const toChild = writer(child.stdin);
 const toPi = writer(process.stdout);
-const tracked = new Map<string, { id: unknown; method: string; deadline: number; startedAt: number }>();
+type Id = { key: string; wire: unknown };
+const tracked = new Map<string, { id: Id; method: string; deadline: number; ms: bigint }>();
 const answered = new Set<string>();
 const methods = new Set(['_x.ai/hooks/run', 'session/request_permission', '_x.ai/ask_user_question']);
-let lastHeartbeat = performance.now(), stopping = false, childExited = false, malformed = 0;
+let lastHeartbeat = performance.now(), lastTick = lastHeartbeat, stopping = false, childExited = false, malformed = 0;
 let timer: ReturnType<typeof setInterval> | undefined;
+const decoder = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true });
+const tokens = new WeakMap<object, Record<string, string>>();
 function parse(line: Buffer): Record<string, any> | undefined {
   try {
-    const value = JSON.parse(line.toString('utf8'));
+    const text = decoder.decode(line);
+    // Match the Rust parser's depth limit and rejection of lone UTF-16 surrogates,
+    // including strings that a later duplicate object key would otherwise overwrite.
+    let depth = 0;
+    for (const [token] of text.matchAll(/"(?:\\.|[^"\\])*"|[{}\[\]]|[^\s{}\[\],:]+/g)) {
+      if (token === '}' || token === ']') { depth--; continue; }
+      if (depth > 129) throw new Error('JSON depth exceeds 128');
+      if (token === '{' || token === '[') depth++;
+      else if (token.startsWith('"')) {
+        for (const char of JSON.parse(token) as string) {
+          const cp = char.codePointAt(0)!;
+          if (cp >= 0xd800 && cp <= 0xdfff) throw new Error('unpaired surrogate');
+        }
+      }
+    }
+    const value = JSON.parse(text, function (key, value, context?: { source?: string }) {
+      if ((key === 'id' || key === 'ms') && context?.source) {
+        const fields = tokens.get(this) ?? Object.create(null);
+        fields[key] = context.source;
+        tokens.set(this, fields);
+      }
+      return value;
+    });
     if (value && typeof value === 'object' && !Array.isArray(value)) return value;
-  } catch { /* Non-JSON is passed through unchanged. */ }
+  } catch { /* Malformed bytes are passed through unchanged. */ }
   malformed++;
+}
+function idOf(message: Record<string, any> | undefined): Id | undefined {
+  if (!message || !['string', 'number'].includes(typeof message.id)) return;
+  const raw = tokens.get(message)?.id;
+  if (raw) return { key: typeof message.id === 'string' ? `s:${message.id}` : `n:${raw}`, wire: rawJSON(raw) };
+}
+function expire(now: number) {
+  const expired = [...tracked.entries()].filter(([, request]) => now >= request.deadline)
+    .sort(([, a], [, b]) => a.deadline - b.deadline);
+  for (const [key, request] of expired) {
+    tracked.delete(key);
+    answered.add(key);
+    const { id, method, ms } = request;
+    const result = method === '_x.ai/hooks/run'
+      ? { decision: 'deny', reason: `pi-grok-leash: no answer in ${ms} ms` }
+      : { outcome: { outcome: 'cancelled' } };
+    void toChild(JSON.stringify({ jsonrpc: '2.0', id: id.wire, result }) + '\n')
+      .then(() => event('deadline', { id: id.wire, method, ms: wireMs(ms) })).catch(fail);
+  }
 }
 function event(name: string, params: Record<string, unknown> = {}) {
   const line = JSON.stringify({ jsonrpc: '2.0', method: 'pi/leash', params: { event: name, ...params } }) + '\n';
@@ -96,9 +150,9 @@ async function finish(code: number, kill: boolean, notification?: { name: string
   clearInterval(timer);
   process.stdin.destroy();
   if (kill) killGroup();
-  if (notification) await event(notification.name, notification.params);
   await childExit;
-  if (log) appendFileSync(log, JSON.stringify({ event: 'summary', malformed }) + '\n');
+  if (notification) await event(notification.name, notification.params);
+  if (log) appendFileSync(log, JSON.stringify({ event: 'exit', code, malformed }) + '\n');
   await toPi('');
   process.stdout.end(() => process.exit(code));
 }
@@ -109,20 +163,20 @@ function fail(error: unknown) {
 }
 child.stdin.on('error', fail);
 process.stdout.on('error', () => { killGroup(); process.exit(1); });
-await event('ready', { version: '0.0.0-fake', grokPid: child.pid, stallMs, requestMs });
+await event('ready', { version: '0.0.0-fake', grokPid: child.pid, stallMs: wireMs(stallMs), requestMs: wireMs(requestMs) });
 
 const output = (async () => {
   for await (const line of lines(child.stdout)) {
     if (stopping) break;
     const message = parse(line);
-    if (message && methods.has(message.method) && 'id' in message) {
-      const now = performance.now(), key = JSON.stringify(message.id);
-      tracked.set(key, { id: message.id, method: message.method, deadline: now + requestMs, startedAt: now });
-      if (tracked.size > 64) {
-        await toPi(line);
-        await finish(0, true, { name: 'stall', params: { ms: Math.round(now - lastHeartbeat) } });
+    const id = idOf(message);
+    if (message && methods.has(message.method) && id) {
+      if (tracked.size === 64 && !tracked.has(id.key)) {
+        await finish(0, true, { name: 'stall', params: { ms: wireMs(stallMs) } });
         return;
       }
+      answered.delete(id.key);
+      tracked.set(id.key, { id, method: message.method, deadline: performance.now() + Number(requestMs), ms: requestMs });
     }
     await toPi(line);
   }
@@ -134,48 +188,47 @@ void (async () => {
     const message = parse(line);
     if (message?.method === 'pi/heartbeat') {
       lastHeartbeat = performance.now();
-      if (log) appendFileSync(log, JSON.stringify({ event: 'heartbeat', t: lastHeartbeat }) + '\n');
+      recordTrace({ event: 'heartbeat', t: lastHeartbeat });
       continue;
     }
     if (message?.method === 'pi/extend') {
-      if (log) appendFileSync(log, JSON.stringify({ event: 'extend', ...message.params }) + '\n');
-      const request = tracked.get(JSON.stringify(message.params?.id));
-      const ms = message.params?.ms;
-      if (request && Number.isFinite(ms) && ms >= 0) request.deadline = performance.now() + ms;
+      recordTrace({ event: 'extend', ...message.params });
+      const id = idOf(message.params), token = message.params && tokens.get(message.params)?.ms;
+      const request = id && tracked.get(id.key), now = performance.now();
+      if (request && now < request.deadline && token && /^\d+$/.test(token)) {
+        const ms = BigInt(token);
+        if (ms <= U64_MAX) { request.deadline = now + Number(ms); request.ms = ms; }
+      }
       continue;
     }
-    if (message && 'id' in message && !('method' in message) && ('result' in message || 'error' in message)) {
-      const key = JSON.stringify(message.id);
-      if (answered.has(key)) { await event('late-reply', { id: message.id }); continue; }
-      tracked.delete(key);
+    const id = idOf(message);
+    if (id && typeof message?.method !== 'string') {
+      expire(performance.now()); // Claim expiration even between watchdog ticks.
+      tracked.delete(id.key);
+      if (answered.has(id.key)) { void event('late-reply', { id: id.wire }).catch(fail); continue; }
     }
     // Keep reading heartbeats even when Grok stops reading stdin. The writer chain
     // is intentionally unbounded and preserves order, including synthetic replies.
     void toChild(line).catch(fail);
   }
-  if (!childExited) await finish(0, true);
+  if (!childExited) await finish(0, true, { name: 'parent-gone', params: {} });
 })().catch(fail);
 
 timer = setInterval(() => {
   if (stopping || childExited) return;
-  const now = performance.now(), gap = now - lastHeartbeat;
-  if (gap > 10 * stallMs) lastHeartbeat = now;
-  else if (gap > stallMs) {
-    void finish(0, true, { name: 'stall', params: { ms: Math.round(gap) } }).catch(fail);
+  if (process.ppid !== parent) {
+    void finish(0, true, { name: 'parent-gone', params: {} }).catch(fail);
     return;
   }
-  for (const [key, request] of tracked) {
-    if (now < request.deadline) continue;
-    tracked.delete(key);
-    answered.add(key);
-    const ms = Math.round(now - request.startedAt);
-    const result = request.method === '_x.ai/hooks/run'
-      ? { decision: 'deny', reason: `pi-grok-leash: no answer in ${ms} ms` }
-      : { outcome: { outcome: 'cancelled' } };
-    void toChild(JSON.stringify({ jsonrpc: '2.0', id: request.id, result }) + '\n')
-      .then(() => event('deadline', { id: request.id, method: request.method, ms })).catch(fail);
+  const now = performance.now();
+  if (now - lastTick > 10 * Number(stallMs)) lastHeartbeat = now;
+  lastTick = now;
+  if (now - lastHeartbeat >= Number(stallMs)) {
+    void finish(0, true, { name: 'stall', params: { ms: wireMs(stallMs) } }).catch(fail);
+    return;
   }
-}, 50);
+  expire(now);
+}, 2);
 void childExit.then(async ({ code, signal }) => {
   childExited = true;
   clearInterval(timer);
