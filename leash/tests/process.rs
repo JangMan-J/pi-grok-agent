@@ -94,6 +94,9 @@ impl Harness {
         .unwrap()
     }
     fn beats(&mut self) {
+        self.beats_every(Duration::from_millis(10));
+    }
+    fn beats_every(&mut self, interval: Duration) {
         self.beating.store(true, Ordering::SeqCst);
         let beating = Arc::clone(&self.beating);
         let input = Arc::clone(&self.input);
@@ -110,7 +113,7 @@ impl Harness {
                 } else {
                     break;
                 }
-                thread::sleep(Duration::from_millis(10));
+                thread::sleep(interval);
             }
         }));
     }
@@ -399,6 +402,53 @@ fn blocked_child_input_does_not_block_watchdog_kill() {
     assert_eq!(h.wait().code(), Some(0));
     writer.join().unwrap();
     assert!(dead(h.grok_pid));
+}
+
+#[test]
+fn queued_forwarding_keeps_heartbeats_live_while_grok_pauses_reading() {
+    let mut command = Command::new(LEASH);
+    command.args([
+        "--parent",
+        &std::process::id().to_string(),
+        "--stall-ms",
+        "300",
+        "--",
+        FAKE,
+        "--delay-read",
+    ]);
+    let mut h = Harness::from_command(command);
+    h.beats_every(Duration::from_millis(50));
+    let started = Instant::now();
+    let lines: Vec<_> = (0..800).map(|sequence| {
+        format!("{{\"jsonrpc\":\"2.0\",\"id\":99,\"result\":{{\"sequence\":{sequence},\"padding\":\"{}\"}}}}\n", "x".repeat(256))
+    }).collect();
+    assert!(lines.iter().map(String::len).sum::<usize>() > 128 * 1024);
+    // Release the harness input mutex after each line so its heartbeat sender
+    // can interleave controls during the burst as well as during the pause.
+    for line in &lines {
+        h.send(line.as_bytes());
+    }
+    assert!(
+        started.elapsed() < Duration::from_secs(2),
+        "burst blocked behind grok's pipe"
+    );
+    for expected in &lines {
+        assert_eq!(
+            &h.line(),
+            expected,
+            "queued lines must be delivered once and in order, with no stall event"
+        );
+    }
+    let remaining = Duration::from_millis(3500).saturating_sub(started.elapsed());
+    assert!(
+        h.output.recv_timeout(remaining).is_err(),
+        "unexpected event while heartbeats are flowing"
+    );
+    assert!(!dead(h.grok_pid));
+    assert!(h.child.try_wait().unwrap().is_none());
+    h.eof();
+    assert!(h.line().contains("\"event\":\"parent-gone\""));
+    assert_eq!(h.wait().code(), Some(0));
 }
 
 #[test]

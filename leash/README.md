@@ -24,11 +24,16 @@ with the count of malformed lines observed across both directions.
   `deadline.ms` and the denial reason use the most recent deadline length
   (the initial request length or the latest accepted extension). Zero-length
   extensions expire immediately; negative/non-integer extensions are ignored.
-- `src/runtime.rs` starts two blocking forwarders and one timer. Each output
-  has one `Mutex<BufWriter>` and flushes after each line. The timer queues
-  synthetic-response work to the main child-reaping thread, so blocked writes
-  cannot prevent the timer from killing the child group. No protocol-forwarding
-  queues bypass pipe backpressure.
+- `src/runtime.rs` starts a Pi reader, a grok writer, a grok-to-Pi forwarder,
+  and a timer. The Pi reader updates an atomic monotonic heartbeat timestamp
+  and applies extensions immediately, then puts non-control lines onto an
+  unbounded `std::sync::mpsc` queue. The grok writer drains that queue and also
+  writes synthetic replies. Each output has one `Mutex<BufWriter>` and flushes
+  after each line. Blocked writes cannot prevent heartbeat consumption or the
+  timer's group kill. Per the Manager's clarification, Pi-to-grok is intentionally
+  queue-buffered: there is no backpressure from grok to Pi in that direction,
+  no queue capacity limit, and sustained input can grow memory use. Grok-to-Pi
+  still has natural pipe backpressure.
 - `ready` precedes starting the forwarders. On natural child exit, buffered
   stdout drains before `child-exit`. Leash-initiated kills produce only `stall`
   or `parent-gone`, not `child-exit`. Competing terminal causes use the first
@@ -42,10 +47,11 @@ with the count of malformed lines observed across both directions.
 - Final unterminated bytes are forwarded unchanged. Consequently an event can
   immediately follow those bytes without an intervening newline: invalid NDJSON
   input is not repaired. The input protocol is newline-terminated NDJSON.
-- Backpressure is literal: a blocked grok stdin can prevent the Pi forwarder
-  from reaching subsequent heartbeats and cause a stall kill. A blocked Pi
-  stdout delays event delivery and leash exit until the reader resumes, but
-  the timer kills grok's group before attempting to deliver the terminal event.
+- A blocked grok stdin does not starve Pi heartbeat or extension handling. A
+  blocked Pi stdout delays event delivery and leash exit until the reader
+  resumes, but the timer kills grok's group before attempting to deliver the
+  terminal event. EOF still kills immediately, rather than draining queued
+  Pi-to-grok lines after the parent has disconnected.
 - Linux arms `PR_SET_PDEATHSIG` both for the leash and in grok's pre-exec and
   checks parent identity after arming each. Other Unix targets use EOF and
   parent-identity polling, and `--version` reports `(eof-only)`. Non-Linux
@@ -70,8 +76,11 @@ escaping/nested fields, malformed input, deadlines, extensions, the 64-request
 limit, and suspend re-baselining. `tests/process.rs` covers readiness, stalls,
 synthetic results for all three methods, string IDs, late replies, byte-exact
 forwarding, overflow, EOF cleanup, buffered output before exit, exit codes and
-signals, logs, parent mismatch, backpressure, and Linux parent death within
-500 ms. A Linux zombie is considered dead (not running), then reaped by the test.
+signals, logs, parent mismatch, blocked child input, and Linux parent death
+within 500 ms. The queued-input regression pauses fake grok's reads for 3 s,
+uses stall-ms 300 and heartbeats every 50 ms, then checks more than 128 KiB
+(800 lines) arrives byte-for-byte in order with no stall over 3.5 s. A Linux
+zombie is considered dead (not running), then reaped by the test.
 
 ```
 cargo build --release

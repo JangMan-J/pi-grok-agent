@@ -22,6 +22,9 @@ fn main() {
             .unwrap();
         std::process::exit(child.wait().unwrap().code().unwrap_or(1));
     }
+    if args.get(1).is_some_and(|arg| arg == "--delay-read") {
+        std::thread::sleep(std::time::Duration::from_secs(3));
+    }
     let mut input = BufReader::new(io::stdin());
     let mut output = io::stdout().lock();
     let mut line = Vec::new();

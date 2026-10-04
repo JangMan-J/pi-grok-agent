@@ -28,7 +28,8 @@ struct Shared {
     pi: PiOutput,
     grok: GrokInput,
     tracker: Mutex<Tracker>,
-    heartbeat: Mutex<Heartbeat>,
+    started: Instant,
+    last_heartbeat_ns: AtomicU64,
     stopping: AtomicBool,
     child_exited: AtomicBool,
     malformed: AtomicU64,
@@ -39,7 +40,14 @@ struct Shared {
 enum Message {
     Stop(&'static str),
     Expired(Vec<Request>),
+    Deadline(Request),
+    LateReply(String),
     OutputClosed,
+}
+
+enum GrokWrite {
+    Forward(Vec<u8>),
+    Synthetic(Request),
 }
 
 fn write_line(writer: &mut impl Write, line: &[u8]) -> io::Result<()> {
@@ -146,7 +154,8 @@ pub fn run(options: Options) -> io::Result<i32> {
         pi: Mutex::new(BufWriter::new(io::stdout())),
         grok: Mutex::new(BufWriter::new(child.stdin.take().unwrap())),
         tracker: Mutex::new(Tracker::default()),
-        heartbeat: Mutex::new(Heartbeat::new(Instant::now(), options.stall_ms)),
+        started: Instant::now(),
+        last_heartbeat_ns: AtomicU64::new(0),
         stopping: AtomicBool::new(false),
         child_exited: AtomicBool::new(false),
         malformed: AtomicU64::new(0),
@@ -177,9 +186,13 @@ pub fn run(options: Options) -> io::Result<i32> {
         return Err(error);
     }
 
+    // Controls must remain readable even while grok's stdin is full. This queue
+    // intentionally has no capacity limit: a blocked send would starve controls.
+    let (forward_tx, forward_rx) = mpsc::channel::<GrokWrite>();
+    let pi_tx = forward_tx.clone();
     let pi = Arc::clone(&shared);
     thread::Builder::new()
-        .name("pi-to-grok".into())
+        .name("pi-reader".into())
         .spawn(move || {
             let mut input = BufReader::new(io::stdin());
             let mut line = Vec::new();
@@ -198,7 +211,10 @@ pub fn run(options: Options) -> io::Result<i32> {
                 if let Some(frame) = pi.parsed(&line) {
                     match frame.method.as_deref() {
                         Some("pi/heartbeat") => {
-                            pi.heartbeat.lock().unwrap().beat(Instant::now());
+                            pi.last_heartbeat_ns.store(
+                                u64::try_from(pi.started.elapsed().as_nanos()).unwrap_or(u64::MAX),
+                                Ordering::Relaxed,
+                            );
                             continue;
                         }
                         Some("pi/extend") => {
@@ -219,13 +235,7 @@ pub fn run(options: Options) -> io::Result<i32> {
                                     let _ = pi.messages.send(Message::Expired(expired));
                                 }
                                 if late {
-                                    if pi
-                                        .event("late-reply", &format!(r#""id":{}"#, id.raw))
-                                        .is_err()
-                                    {
-                                        pi.stop("parent-gone");
-                                        break;
-                                    }
+                                    let _ = pi.messages.send(Message::LateReply(id.raw));
                                     continue;
                                 }
                             }
@@ -233,8 +243,39 @@ pub fn run(options: Options) -> io::Result<i32> {
                         _ => (),
                     }
                 }
-                if write_line(&mut *pi.grok.lock().unwrap(), &line).is_err() {
+                if pi_tx
+                    .send(GrokWrite::Forward(std::mem::take(&mut line)))
+                    .is_err()
+                {
                     break;
+                }
+            }
+        })
+        .inspect_err(|_| {
+            shared.stop("parent-gone");
+            let _ = child.wait();
+        })?;
+
+    let writer = Arc::clone(&shared);
+    thread::Builder::new()
+        .name("grok-writer".into())
+        .spawn(move || {
+            for work in forward_rx {
+                if writer.stopping.load(Ordering::SeqCst) {
+                    break;
+                }
+                let (line, request) = match work {
+                    GrokWrite::Forward(line) => (line, None),
+                    GrokWrite::Synthetic(request) => (
+                        format!("{}\n", request.synthetic()).into_bytes(),
+                        Some(request),
+                    ),
+                };
+                if write_line(&mut *writer.grok.lock().unwrap(), &line).is_err() {
+                    break;
+                }
+                if let Some(request) = request {
+                    let _ = writer.messages.send(Message::Deadline(request));
                 }
             }
         })
@@ -296,13 +337,20 @@ pub fn run(options: Options) -> io::Result<i32> {
     thread::Builder::new()
         .name("leash-timer".into())
         .spawn(move || {
+            let mut heartbeat = Heartbeat::new(timer.started, timer.stall_ms);
+            let mut seen_heartbeat_ns = 0;
             while !timer.stopping.load(Ordering::SeqCst) {
                 if unsafe { libc::getppid() } != timer.parent {
                     timer.stop("parent-gone");
                     break;
                 }
+                let heartbeat_ns = timer.last_heartbeat_ns.load(Ordering::Relaxed);
+                if heartbeat_ns != seen_heartbeat_ns {
+                    heartbeat.beat(timer.started + Duration::from_nanos(heartbeat_ns));
+                    seen_heartbeat_ns = heartbeat_ns;
+                }
                 let now = Instant::now();
-                if timer.heartbeat.lock().unwrap().stalled(now) {
+                if heartbeat.stalled(now) {
                     timer.stop("stall");
                     break;
                 }
@@ -315,8 +363,8 @@ pub fn run(options: Options) -> io::Result<i32> {
             let _ = child.wait();
         })?;
 
-    // The timer only queues deadline work. Blocking writes here cannot prevent it
-    // killing the group when Pi stalls (including backpressure on either pipe).
+    // Synthetic replies go through the same queued writer as forwarded lines.
+    // Neither that writer nor a blocked Pi event can delay the watchdog's kill.
     let mut status = None;
     let mut output_closed = false;
     let result = loop {
@@ -336,12 +384,20 @@ pub fn run(options: Options) -> io::Result<i32> {
                     if shared.stopping.load(Ordering::SeqCst) {
                         break;
                     }
-                    let response = format!("{}\n", request.synthetic());
-                    if write_line(&mut *shared.grok.lock().unwrap(), response.as_bytes()).is_ok()
-                        && shared.event("deadline", &request.event_fields()).is_err()
-                    {
-                        shared.stop("parent-gone");
-                    }
+                    let _ = forward_tx.send(GrokWrite::Synthetic(request));
+                }
+            }
+            Ok(Message::Deadline(request)) => {
+                if shared.event("deadline", &request.event_fields()).is_err() {
+                    shared.stop("parent-gone");
+                }
+            }
+            Ok(Message::LateReply(id)) => {
+                if shared
+                    .event("late-reply", &format!(r#""id":{id}"#))
+                    .is_err()
+                {
+                    shared.stop("parent-gone");
                 }
             }
             Ok(Message::OutputClosed) => output_closed = true,
