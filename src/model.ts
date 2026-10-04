@@ -320,16 +320,19 @@ export default async function grokModel(pi: ExtensionAPI) {
             const u = session.usageTotals; const denied = session.hookLog.filter((h) => h.decision === 'deny').length;
             const piToolAttributions = getPiToolAttributions();
             const blockedPiToolNames = blockedToolNamesForExtensions(blockedPiExtensions, piToolAttributions);
-            const withheldPiTools = sortedNames(piToolAttributions.map((tool) => tool.name).filter((toolName) => blockedPiToolNames.has(toolName)));
+            const withheldPiTools = sortedNames(session.piToolNames.filter((toolName) => blockedPiToolNames.has(toolName)));
             show('Grok debug', [
               `gateway: ${config.url} (${connection.isOpen ? 'connected' : 'not connected'}${connection.launchedGateway ? `, started by this Pi as pid ${connection.launchedGateway}` : ''}${connection.lastDrop ? `, last drop: ${connection.lastDrop}` : ''}; auto-start ${config.autoStartGateway ? 'on' : 'off'})`,
               `grok session: ${session.grokSessionId ?? '(none yet; first message creates it)'}`,
               `mode: ${session.mode}${session.promptActive ? ' (turn running)' : ''}; pi perms: ${session.permissionMode}; grok mode: ${session.grokMode}`,
               `grok context: ${session.lastContextTokens != null ? `${session.lastContextTokens.toLocaleString()} / ${contextWindowFor(session.grokModel).toLocaleString()}` : 'unknown'}`,
               `usage: ${u.turns} turns, ${u.inputTokens.toLocaleString()} in (${u.cachedReadTokens.toLocaleString()} cached), ${u.outputTokens.toLocaleString()} out, $${u.costUsd.toFixed(3)}`,
-              `lent Pi tools: ${session.piToolRoutes.length ? session.piToolRoutes.map((route) => (route.exposedName === route.originalName ? callableName(route) : `${callableName(route)} → ${route.originalName}`)).join(', ') : session.grokSessionId ? 'none' : '(chosen when the Grok session starts)'}`,
+              // Tool lines describe the tool list a Grok session took at its start; none exists before the first message.
+              ...(session.grokSessionId ? [
+                `lent Pi tools: ${session.piToolRoutes.length ? session.piToolRoutes.map((route) => (route.exposedName === route.originalName ? callableName(route) : `${callableName(route)} → ${route.originalName}`)).join(', ') : 'none'}`,
+                `withheld Pi extension tools: ${withheldPiTools.join(', ') || 'none'}`,
+              ] : []),
               `blocked Pi extensions: ${blockedPiExtensions.size ? sortedNames(blockedPiExtensions).join(', ') : 'none'}`,
-              `withheld Pi extension tools: ${withheldPiTools.join(', ') || 'none'}`,
               `recent hook decisions: ${session.hookLog.length} (${denied} denied); pending lent-tool calls: ${session.pendingToolCallIds.length}`,
               `Grok tool calls seen: ${session.toolCallsSeen} (pre_tool_use hooks; a grok-tools row holds up to ${config.toolBatchSize} calls)`,
             ].join('\n'));
