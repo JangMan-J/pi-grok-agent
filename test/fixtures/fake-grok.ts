@@ -26,10 +26,15 @@ if (args.includes('leader')) {
   const log = process.env.FAKE_GROK_LOG;
   if (log) appendFileSync(log, JSON.stringify({ id: 'spawn', argv: args, autoupdate: process.env.GROK_DISABLE_AUTOUPDATER }) + '\n');
   const send = (message: unknown) => process.stdout.write(JSON.stringify(message) + '\n');
+  const waiters = new Map<string, (message: Record<string, any>) => void>();
   const lines = createInterface({ input: process.stdin });
   lines.on('line', async (line) => {
     let message: Record<string, any>;
     try { message = JSON.parse(line); } catch { return; }
+    if (message.id != null && ('result' in message || 'error' in message)) {
+      const waiter = waiters.get(JSON.stringify(message.id));
+      if (waiter) { waiters.delete(JSON.stringify(message.id)); waiter(message); return; }
+    }
     if (message.method === 'test/emit') { send(message.params); return; }
     // Signed in, Grok offers cached_token. FAKE_GROK_LOGGED_OUT=1 offers only the interactive method, as a real logged-out Grok does.
     if (message.method === 'initialize') {
@@ -43,10 +48,13 @@ if (args.includes('leader')) {
       if (log) appendFileSync(log, JSON.stringify({ id: 'session/new', params: message.params }) + '\n');
       const models = (process.env.FAKE_GROK_MODELS ?? '').split(',').filter(Boolean);
       const configOptions = models.length ? [{ id: 'model', currentValue: models[0], options: models.map((value) => ({ value, name: value })) }] : undefined;
-      const mcpUrl = message.params?.mcpServers?.[0]?.url;
-      if (process.env.FAKE_GROK_MCP_LIST === '1' && mcpUrl && log) {
-        const answer = await fetch(mcpUrl, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/list' }) }).then((r) => r.json());
-        appendFileSync(log, JSON.stringify({ ...answer, id: 'mcp-tools-list' }) + '\n');
+      if (process.env.FAKE_GROK_MCP_LIST === '1' && log) {
+        const serverId = message.params?._meta?.['x.ai/mcp/servers']?.[0]?.serverId;
+        const answer = await new Promise<Record<string, any>>((resolve) => {
+          waiters.set(JSON.stringify('mcp-list'), resolve);
+          send({ jsonrpc: '2.0', id: 'mcp-list', method: '_x.ai/mcp/sdk_call', params: { serverId, message: { jsonrpc: '2.0', id: 1, method: 'tools/list' } } });
+        });
+        appendFileSync(log, JSON.stringify({ ...(answer.result ?? answer), id: 'mcp-tools-list' }) + '\n');
       }
       send({ jsonrpc: '2.0', id: message.id, result: { sessionId: 'fake-session', ...(configOptions ? { configOptions } : {}) } }); return;
     }

@@ -48,16 +48,3 @@ test('toolBatchSize defaults to the batcher default and loads from grok-ws.json'
   await assert.rejects(readConfig(), /toolBatchSize must be a positive integer/);
 });
 
-test('MCP mode is environment-only and readConfig returns a snapshot', async (t) => {
-  const before = process.env.PI_GROK_MCP;
-  t.after(() => { if (before === undefined) delete process.env.PI_GROK_MCP; else process.env.PI_GROK_MCP = before; });
-  await writeFile(join(dir, 'grok-ws.json'), JSON.stringify({ mcp: 'sdk' }));
-  delete process.env.PI_GROK_MCP;
-  const http = await readConfig();
-  assert.equal(http.mcp, 'http', 'the JSON file does not select the temporary probe mode');
-  process.env.PI_GROK_MCP = 'sdk';
-  assert.equal(http.mcp, 'http');
-  assert.equal((await readConfig()).mcp, 'sdk');
-  process.env.PI_GROK_MCP = 'invalid';
-  await assert.rejects(readConfig(), /PI_GROK_MCP must be http or sdk/);
-});

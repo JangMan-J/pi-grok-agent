@@ -89,15 +89,7 @@ export type HookSettings = {
   stopCheck?: string;
 };
 
-export type McpMode = 'http' | 'sdk';
-export function parseMcpMode(value: string | undefined): McpMode {
-  if (value === undefined || value === 'http') return 'http';
-  if (value === 'sdk') return 'sdk';
-  throw new Error('PI_GROK_MCP must be http or sdk.');
-}
-
 export async function readConfig() {
-  const mcp = parseMcpMode(process.env.PI_GROK_MCP);
   let settings: { piTools?: PiToolPolicy; blockedPiExtensions?: string[]; permissionMode?: PiPermissionMode; toolBatchSize?: number; hooks?: HookSettings; headlessPermissions?: HeadlessPermissionPolicy; guard?: GuardSettings; mediaDir?: string; grokMode?: GrokMode } = {};
   try { settings = JSON.parse(await readFile(configPath, 'utf8')); }
   catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error; }
@@ -118,7 +110,7 @@ export async function readConfig() {
   const mediaDir = process.env.PI_GROK_MEDIA_DIR ?? settings.mediaDir ?? '.pi/grok-images';
   const grokMode = (process.env.PI_GROK_GROK_MODE as GrokMode | undefined) ?? settings.grokMode ?? 'default';
   if (!['default', 'auto', 'yolo'].includes(grokMode)) throw new Error(`grokMode must be default, auto, or yolo (got ${grokMode}).`);
-  return { mcp, piTools, blockedPiExtensions, permissionMode, toolBatchSize, hooks, headlessPermissions, guard, mediaDir, grokMode };
+  return { piTools, blockedPiExtensions, permissionMode, toolBatchSize, hooks, headlessPermissions, guard, mediaDir, grokMode };
 }
 
 /**

@@ -5,7 +5,6 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import { GrokModelConnection, type SessionHandlers } from '../src/model/connection.ts';
-import { parseMcpMode } from '../src/config.ts';
 import { GrokModelSession } from '../src/model/session.ts';
 
 const FAKE_GROK = join(import.meta.dirname, 'fixtures', 'fake-grok.ts');
@@ -51,14 +50,14 @@ test('simulated Grok lists lent Pi tools while session/new is still pending', as
   const session = new GrokModelSession(connection, 'pi-mcp', s.home);
   session.tools = [{ name: 'intercom', description: 'Message another session', parameters: { type: 'object', properties: {} } as any }];
   await session.attach(undefined);
-  assert.equal(received(s, 'initialize')[0].params._meta?.['x.ai/mcp/sdk'], undefined);
+  assert.deepEqual(received(s, 'initialize')[0].params._meta, { 'x.ai/mcp/sdk': true });
   const params = received(s, 'session/new')[0].params;
-  assert.match(params.mcpServers[0].url, /^http:\/\/127\.0\.0\.1:\d+\/mcp\//);
-  assert.equal(params._meta['x.ai/mcp/servers'], undefined);
+  assert.deepEqual(params.mcpServers, []);
+  assert.equal(params._meta['x.ai/mcp/servers'][0].name, 'pi');
   await connection.attachSession({ ...input, sessionId: 'fake-session', offerPiTools: true });
   const loaded = received(s, 'session/load')[0].params;
-  assert.equal(loaded.mcpServers[0].url, `${connection.mcpBaseUrl}/mcp/server`);
-  assert.equal(loaded._meta['x.ai/mcp/servers'], undefined);
+  assert.deepEqual(loaded.mcpServers, []);
+  assert.equal(loaded._meta['x.ai/mcp/servers'][0].serverId, 'server');
   const [listed] = received(s, 'mcp-tools-list');
   assert.equal(listed.error, undefined, `the handshake is answered (${JSON.stringify(listed.error)})`);
   assert.deepEqual(listed.result.tools.map((tool: { name: string }) => tool.name), ['intercom']);
@@ -182,34 +181,6 @@ test('pending gates have no timer answer, close fails closed, late handlers cann
   assert.equal(received(s, 'pending-perm').length, 1);
 });
 
-test('HTTP MCP status, notification, error and validation behavior', async (t) => {
-  const connection = new GrokModelConnection(); t.after(() => connection.close());
-  t.mock.getter(GrokModelConnection.prototype, 'agent', () => ({ request: async () => ({ sessionId: 'session' }) }) as never);
-  let calls = 0;
-  await connection.attachSession({ ...input, offerPiTools: true, handlers: { ...handlers, async onMcp(message) {
-    calls++;
-    if (message.method === 'fail') throw new Error('tool failed');
-    return { tools: [] };
-  } } });
-  const url = `${connection.mcpBaseUrl}/mcp/server`;
-  const post = (body: string, target = url) => fetch(target, { method: 'POST', body });
-  assert.equal((await fetch(`${connection.mcpBaseUrl}/other`)).status, 404);
-  const unknown = await post('{}', `${connection.mcpBaseUrl}/mcp/unknown`);
-  assert.equal(unknown.status, 404);
-  assert.deepEqual(await unknown.json(), { error: 'unknown MCP token' });
-  const get = await fetch(url); assert.equal(get.status, 405); assert.equal(get.headers.get('allow'), 'POST');
-  for (const body of ['{', '{}', 'null', '[]', '{"method":3}']) assert.equal((await post(body)).status, 400);
-  for (const body of ['{"method":"initialized"}', '{"method":"initialized","id":null}']) {
-    const response = await post(body); assert.equal(response.status, 202); assert.equal(await response.text(), '');
-  }
-  assert.equal(calls, 0);
-  assert.deepEqual(await (await post('{"method":"tools/list","id":0}')).json(), { jsonrpc: '2.0', id: 0, result: { tools: [] } });
-  const error = await post('{"method":"fail","id":1}'); assert.equal(error.status, 200);
-  assert.deepEqual(await error.json(), { jsonrpc: '2.0', id: 1, error: { code: -32603, message: 'tool failed' } });
-  connection.detachSession('session', 'server');
-  assert.equal((await post('{}')).status, 404);
-});
-
 test('missing binary and pre-initialize exit report the binary; abort ends the child', async (t) => {
   const s = scratch(); t.after(s.cleanup);
   const missing = new GrokModelConnection({ binary: join(s.home, 'missing-grok') }); t.after(() => missing.close());
@@ -227,9 +198,9 @@ test('missing binary and pre-initialize exit report the binary; abort ends the c
   assert.match(connection.lastDrop!, /cancelled/);
 });
 
-test('temporary SDK MCP mode advertises only its channel and routes JSON-RPC through session handlers', async (t) => {
+test('sdk_call routes one MCP message through the session handler', async (t) => {
   const s = scratch(); t.after(s.cleanup);
-  const connection = new GrokModelConnection({ binary: FAKE_GROK, env: { FAKE_GROK_LOG: s.log }, mcp: 'sdk' });
+  const connection = new GrokModelConnection({ binary: FAKE_GROK, env: { FAKE_GROK_LOG: s.log } });
   t.after(() => connection.close());
   const calls: string[] = [];
   await connection.open();
@@ -242,7 +213,6 @@ test('temporary SDK MCP mode advertises only its channel and routes JSON-RPC thr
   assert.deepEqual(params.mcpServers, []);
   assert.deepEqual(params._meta['x.ai/mcp/servers'], [{ name: 'pi', serverId: 'server' }]);
   assert.deepEqual(params._meta.mcpConfig, { pi: { toolTimeoutMs: 1234 } });
-  assert.equal(connection.mcpBaseUrl, undefined, 'no HTTP listener');
   await connection.attachSession({ ...input, sessionId: 'fake-session', serverId: 'loaded-server', offerPiTools: true });
   const loaded = received(s, 'session/load')[0].params;
   assert.deepEqual(loaded.mcpServers, []);
@@ -255,11 +225,4 @@ test('temporary SDK MCP mode advertises only its channel and routes JSON-RPC thr
   assert.deepEqual(received(s, 'sdk-list')[0].result, { jsonrpc: '2.0', id: 1, result: { tools: [{ name: 'lent' }] } });
   assert.equal(received(s, 'sdk-error')[0].result.error.code, -32603);
   assert.equal(received(s, 'sdk-missing')[0].result.error.code, -32603);
-});
-
-test('MCP probe switch accepts only http or sdk, defaulting only when absent', () => {
-  assert.equal(parseMcpMode(undefined), 'http');
-  assert.equal(parseMcpMode('http'), 'http');
-  assert.equal(parseMcpMode('sdk'), 'sdk');
-  for (const value of ['', 'HTTP', 'other']) assert.throws(() => parseMcpMode(value), /PI_GROK_MCP must be http or sdk/);
 });

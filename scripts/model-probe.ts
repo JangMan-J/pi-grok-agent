@@ -1,22 +1,19 @@
-// Live, opt-in: a direct stdio agent calls a Pi-held tool over HTTP (default) or the temporary SDK channel.
-// Uses the production connection, including startMcpServer for HTTP. Never run as part of npm test.
+// Live, opt-in: a direct stdio agent calls a Pi-held tool over `_x.ai/mcp/sdk_call`. Never run as part of npm test.
 import { execFileSync } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import { mkdir, mkdtemp, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { readConfig } from '../src/config.ts';
 import { GrokModelConnection, type SdkCall } from '../src/model/connection.ts';
 
-const config = await readConfig();
-const connection = new GrokModelConnection({ mcp: config.mcp });
+const connection = new GrokModelConnection();
 const cwd = await mkdtemp(join(tmpdir(), 'grok-model-probe-'));
 const token = randomBytes(12).toString('hex');
 const serverId = `pi-probe-${randomBytes(6).toString('hex')}`;
 const toolWaitMs = Number(process.env.GROK_MODEL_PROBE_TOOL_WAIT_MS ?? 5000);
 if (!Number.isFinite(toolWaitMs) || toolWaitMs < 0) throw new Error('GROK_MODEL_PROBE_TOOL_WAIT_MS must be non-negative.');
 const calls: { method: string; name?: string; heldMs?: number }[] = [];
-const evidence: Record<string, unknown> = { transport: config.mcp, cwd, toolWaitMs, calls, node: process.version };
+const evidence: Record<string, unknown> = { cwd, toolWaitMs, calls, node: process.version };
 let text = '';
 const abort = new AbortController();
 const timeout = setTimeout(() => abort.abort(), 240_000);
@@ -50,17 +47,6 @@ try {
     },
   });
   evidence.sessionId = sessionId;
-  if (config.mcp === 'http') {
-    const url = `${connection.mcpBaseUrl}/mcp/${serverId}`;
-    const unknown = await fetch(`${connection.mcpBaseUrl}/mcp/unknown`, { method: 'POST', body: '{}' });
-    evidence.unknownTokenStatus = unknown.status; await unknown.text();
-    if (unknown.status !== 404) throw new Error(`unknown token should be 404, got ${unknown.status}`);
-    const anonymous = await fetch(url, { method: 'POST', body: '{}' });
-    evidence.anonymousProbeStatus = anonymous.status; await anonymous.text();
-    if ([401, 403].includes(anonymous.status)) throw new Error('anonymous probe must not be an auth challenge');
-    const get = await fetch(url); evidence.getStatus = get.status; await get.text();
-    if (get.status !== 405) throw new Error(`GET should be 405, got ${get.status}`);
-  }
   const prompt = await connection.agent.request('session/prompt', { sessionId, prompt: [{ type: 'text', text: 'Call pi__pi_echo_secret once with no arguments and reply with exactly the text it returns. It is a lent MCP tool available through use_tool. Do not use native tools.' }] });
   evidence.stopReason = prompt.stopReason;
   evidence.answer = text.trim();

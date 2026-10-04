@@ -77,7 +77,7 @@ export default async function grokModel(pi: ExtensionAPI) {
   // Live blocked Pi extension set: `/grok extensions` mutates this Set in place and persists it, so the
   // next Grok session lends the updated set without a Pi reload. (Grok reads the tool list once per session.)
   const blockedPiExtensions = new Set(config.blockedPiExtensions);
-  const connection = new GrokModelConnection({ mcp: config.mcp });
+  const connection = new GrokModelConnection();
   let current: GrokModelSession | undefined;
   // Pi-side permission mode, persisted as `permissionMode` in grok-ws.json so a chosen `/grok perms`
   // survives Pi restarts. Applied to every Grok session in configure().

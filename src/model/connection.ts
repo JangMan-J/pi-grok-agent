@@ -1,12 +1,11 @@
-// One stdio agent per Pi process; sessions and HTTP MCP routes share that child.
+// One stdio agent per Pi process. Lent Pi tools travel back over that same pipe as `_x.ai/mcp/sdk_call`.
 import { client, ndJsonStream, type AnyMessage, type ClientConnection, type InitializeResponse, type NewSessionResponse, type LoadSessionResponse, type SessionNotification, type RequestPermissionRequest, type RequestPermissionResponse } from '@agentclientprotocol/sdk';
 import { spawn, type ChildProcessByStdio } from 'node:child_process';
 import { Readable, Writable } from 'node:stream';
-import { GATE_REGISTRATION_MS, type McpMode } from '../config.ts';
+import { GATE_REGISTRATION_MS } from '../config.ts';
 import { ReverseRequestGuard } from './guard.ts';
-import { startMcpServer } from './mcp-server.ts';
 
-export type ConnectionOptions = { binary?: string; env?: NodeJS.ProcessEnv; mcp?: McpMode };
+export type ConnectionOptions = { binary?: string; env?: NodeJS.ProcessEnv };
 type AgentChild = ChildProcessByStdio<Writable, Readable, null>;
 
 export type McpToolDefinition = { name: string; description: string; inputSchema: Record<string, unknown> };
@@ -40,8 +39,6 @@ export class GrokModelConnection {
   private child?: AgentChild;
   private guard?: ReverseRequestGuard;
   private stopping = new Set<Promise<void>>();
-  private mcpServer?: Awaited<ReturnType<typeof startMcpServer>>;
-  private mcpStarting?: ReturnType<typeof startMcpServer>;
   private connection?: ClientConnection;
   private initialized?: InitializeResponse;
   private readonly sessions = new Map<string, SessionHandlers>();
@@ -163,7 +160,7 @@ export class GrokModelConnection {
           protocolVersion: 1,
           clientInfo: { name: 'pi-grok-model', version: '0.1.0' },
           clientCapabilities: { fs: { readTextFile: false, writeTextFile: false }, terminal: false },
-          ...(this.options.mcp === 'sdk' ? { _meta: { 'x.ai/mcp/sdk': true } } : {}),
+          _meta: { 'x.ai/mcp/sdk': true },
         })]);
         if ((this.initialized.authMethods ?? []).some((m) => m.id === 'cached_token')) {
           await Promise.race([ended, agent.request('authenticate', { methodId: 'cached_token' })]);
@@ -189,26 +186,13 @@ export class GrokModelConnection {
   /** Retained for the extension's UI state; no guard deadlines depend on it. */
   hasUI = false;
 
-  get mcpBaseUrl() { return this.mcpServer?.baseUrl; }
-
-  private async ensureMcpServer() {
-    if (!this.mcpStarting) this.mcpStarting = startMcpServer((id) => this.servers.get(id));
-    this.mcpServer = await this.mcpStarting;
-    return this.mcpServer;
-  }
-
-  /** Create or load a Grok session with Grok's native harness intact. `offerPiTools` adds the Pi-hosted MCP server. */
+  /** Create or load a Grok session with Grok's native harness intact. `offerPiTools` registers the in-process MCP server. */
   async attachSession(input: { sessionId?: string; cwd: string; serverId: string; serverName: string; rules?: string; handlers: SessionHandlers; toolTimeoutMs?: number; offerPiTools: boolean; hooks?: boolean; grokMode?: 'default' | 'auto' | 'yolo' }) {
     const _meta: Record<string, unknown> = { yoloMode: input.grokMode === 'yolo', ...(input.grokMode === 'auto' ? { autoMode: true } : {}) };
     if (input.hooks !== false) _meta['x.ai/hooks'] = CLIENT_HOOKS;
     const mcpServers: unknown[] = [];
     if (input.offerPiTools) {
-      if (this.options.mcp === 'sdk') {
-        _meta['x.ai/mcp/servers'] = [{ name: input.serverName, serverId: input.serverId }];
-      } else {
-        await this.ensureMcpServer();
-        mcpServers.push({ type: 'http', name: input.serverName, url: `${this.mcpBaseUrl}/mcp/${input.serverId}`, headers: [] });
-      }
+      _meta['x.ai/mcp/servers'] = [{ name: input.serverName, serverId: input.serverId }];
       _meta.mcpConfig = { [input.serverName]: { toolTimeoutMs: input.toolTimeoutMs ?? 6 * 60 * 60 * 1000 } };
     }
     if (input.rules) _meta.rules = input.rules;
@@ -264,10 +248,6 @@ export class GrokModelConnection {
     this.drop('Pi connection closed');
     this.sessions.clear();
     this.servers.clear();
-    const server = await this.mcpStarting;
-    await server?.close();
-    this.mcpServer = undefined;
-    this.mcpStarting = undefined;
     await Promise.all(this.stopping);
   }
 }
