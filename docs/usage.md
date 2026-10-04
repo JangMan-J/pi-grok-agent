@@ -309,6 +309,8 @@ The unit tests cover the turn split around a lent tool call, abort and resend, p
 
 Live probes spend Grok usage: run only when explicitly requested. `scripts/model-probe.ts` honors `PI_GROK_MCP` to test direct stdio with HTTP (default) or SDK lent tools; `scripts/reconnect-probe.ts` checks stored history after restarting Pi with the same persisted Pi session. `npm run test:live` invokes those two probes. They write `evidence/model-probe.json` and `evidence/reconnect-probe.json`; neither has been run for this implementation.
 
+`scripts/client-gone-probe.ts` spawns a Grok stdio client directly and kills it with a `pre_tool_use` hook unanswered. See [launch-verification.md](launch-verification.md#client-death-probe-2026-10-04).
+
 `scripts/hooks-live.sh` remains an opt-in Pi-driven live check, not part of ordinary tests. Gateway-only probes exit 2 with `stdio-direct: this probe targeted the removed WebSocket gateway and was not rewritten.` They are not evidence for this branch. Historical [launch-verification.md](launch-verification.md) results describe the removed transport. Review local evidence for private paths, session IDs, and tokens before sharing it.
 
 ## Troubleshooting
