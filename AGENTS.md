@@ -42,6 +42,7 @@ Invariants:
 - Custom entries and `grok-media` messages are display only. The provider never sends them to Grok.
 - Grok's model context keeps full tool results. Pi's copies are shortened: 8000 characters in a `grok-tool` entry, 600 in the expanded renderer. Native tool activity stays out of the thinking stream.
 - The gateway starts Grok in default permission mode. Keep `--always-approve` out of `LEADER_ARGS`.
+- `zod` stays in `dependencies` although nothing imports it: `@agentclientprotocol/sdk` lists it as a peer, Pi installs with `--legacy-peer-deps`, and the extension failed with `Cannot find module 'zod/v4'` without it (`docs/launch-verification.md`, G2).
 
 ## Documentation claims
 
