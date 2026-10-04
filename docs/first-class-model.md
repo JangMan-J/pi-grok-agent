@@ -13,10 +13,10 @@ Reason: a Grok Build agent session includes Grok's tool harness. A plain complet
 | Layer | Owner | Contract | Source |
 | --- | --- | --- | --- |
 | Model registration | Pi | `pi.registerProvider("grok", { streamSimple })`, API `grok-acp` | `src/model.ts`, Pi `docs/custom-provider.md` |
-| Transcript to prompt | Provider | Pi project/user context as `_meta.rules`, after stripping Pi harness sections (`tools`, `rules`, `docs`, `skills`) that describe unavailable Pi tools. New user messages and unmatched tool results go as `session/prompt`. For a new Grok session, the earlier Pi transcript is rendered as text (last 60,000 characters). | `src/model/provider.ts` |
+| Transcript to prompt | Provider | Pi project/user context as `_meta.rules`, after stripping Pi harness sections (`tools`, `rules`, `docs`) that describe unavailable Pi tools. Pi's skill catalog keeps only the skills outside `.agents/skills`: Grok lists that shared directory itself and does not search Pi package directories (skill locations in the documentation bundled with Grok Build 1.0.46). New user messages and unmatched tool results go as `session/prompt`. For a new Grok session, the earlier Pi transcript is rendered as text (last 60,000 characters). | `src/model/provider.ts` |
 | Transport | Provider | One WebSocket to the gateway, many Grok sessions, routed by `sessionId` | `src/model/connection.ts`, `src/client.ts` |
 | Backend | Gateway | One supervised `grok agent leader`. One `grok agent --leader stdio` bridge for each WebSocket. The gateway binds its port first and acquires a leader second, so a launch that loses its port owns nothing to stop. | `scripts/server.ts`, `test/gateway.test.ts` |
-| Tool execution | Grok | Native tools run inside Grok. `tool_call` updates are tracked for hook classification but not rendered as assistant thinking; completed packets render as `grok-tool` entries. | `src/model/session.ts` `onUpdate`, `onHookRun` |
+| Tool execution | Grok | Native tools run inside Grok. `tool_call` updates are tracked for hook classification but not rendered as assistant thinking. Routine completions batch into one `grok-tools` row per `toolBatchSize`, while failures, denials, media, and post-edit notes keep their own `grok-tool` rows. A single row first writes the calls batched before it, so rows keep call order. Leftovers flush at turn end, before tree navigation, and at session shutdown. | `src/model/session.ts` `onUpdate`, `onHookRun`, `src/tool-batch.ts`, `src/model.ts`, `test/extension.test.ts` |
 | File edit scheme | Grok configuration | `[toolset] file_toolset = "hashline"` in `~/.grok/config.toml` selects `hashline_read`, `hashline_edit`, `hashline_grep`. Otherwise Grok uses its default file tools. | Grok Build configuration, not this repository |
 | Permissions | Grok asks, Pi answers | `session/request_permission` becomes a Pi selection dialog. Headless Pi uses `headlessPermissions`. | `src/model/permissions.ts` |
 | Questions | Grok asks, Pi answers | `_x.ai/ask_user_question` becomes one Pi dialog for each question. | `src/model/questions.ts` |
@@ -26,18 +26,18 @@ Reason: a Grok Build agent session includes Grok's tool harness. A plain complet
 | Guard | Gateway | `ReverseRequestGuard`: one guarded lifetime for each hook, permission prompt, and question. Tiered fail-closed answers when Pi is slow or gone, driven by `pi/gate-ack`; one answer per request, late Pi answers dropped; `ask` mode moves a hook to the dialog deadline. | `scripts/server.ts`, `resolveGuard` in `src/config.ts`, `test/gateway.test.ts` |
 | Enrich | Pi hook | `post_tool_use` after an edit: syntax check or `postEditCheck`. A failure returns as `additionalContext`. | `postEditContext` in `src/model/hooks.ts` |
 | Hold | Pi hook | `stop`: a failed `stopCheck` blocks the end of turn with the output as the reason. | `stopGate` in `src/model/hooks.ts` |
-| Transcript | Pi session | `grok-tool` entries for completed native calls. Turn usage rides on the assistant message's `usage` (Pi's convention), not a separate entry. Rendered by the extension. Not in model context. | `src/model.ts` |
+| Transcript | Pi session | `grok-tools` batch entries for routine native calls, `grok-tool` entries for the interesting ones. Turn usage rides on the assistant message's `usage` (Pi's convention), not a separate entry. Rendered by the extension. Not in model context. | `src/model.ts` |
 | Steering | Pi input event | Mid-turn Enter goes to `_x.ai/interject` and is recorded as `grok-steer`. Alt+Enter passes through as a follow-up. | `src/model/steer.ts` |
 | Media | Pi hook and message | Media tool results are copied to `mediaDir` and shown after the turn as a display-only `grok-media` message. | `src/model/session.ts` `copyMedia`, `src/model.ts` `flushMedia` |
 
 ## Turn mapping
 
 1. Pi calls `streamSimple(model, context)`.
-2. The provider renders Grok rules from Pi's system prompt by removing Pi's own harness catalog/rule/doc/skill sections, then adding a short bridge instruction that Grok should use its native tools and only call Pi tools with `pi_`-prefixed schemas.
+2. The provider renders Grok rules from Pi's system prompt by removing Pi's own harness catalog/rule/doc sections, then adding a short bridge instruction that Grok should use its native tools, with a list of the lent Pi tools under the `pi__<name>` names that `use_tool` accepts.
 3. First call for a Pi session: `session/new`. Later calls on the same connection reuse the attached session with no request. `session/load` of the stored Grok session occurs only on attach to a connection that has not attached it yet, for example in a new Pi process or after a reconnect.
 4. If a lent Pi tool call is waiting, the newest tool-result message answers it and the Grok turn continues.
 5. Otherwise the new user messages go out as `session/prompt`.
-6. Text and thoughts stream as Pi events. Native tool activity stays out of assistant thinking and renders as completed `grok-tool` entries.
+6. Text and thoughts stream as Pi events. Native tool activity stays out of assistant thinking; routine completions render as `grok-tools` batch rows (leftovers flush at turn end), the interesting ones as `grok-tool` rows.
 7. A lent tool call ends the Pi assistant message with `toolUse`. Pi runs the tool. The next `streamSimple` resumes the same Grok turn.
 8. Prompt completion ends with `stop`, or `length` for `max_tokens`. Abort sends `session/cancel` and returns an aborted result.
 
@@ -53,6 +53,7 @@ Grok keeps the full result of each native tool in its own context. Native tool a
 | --- | --- | --- |
 | `grok-tool` entry `output` | 8000 characters | `resultText` in `src/model/session.ts` |
 | Rendered `grok-tool` line | 100 characters of input. Expanded: 600 characters of output. | `src/model.ts` |
+| Rendered `grok-tools` batch line | `N calls (2 read_file · 1 grep)` plus total ms. Expanded: one line per call (100 chars input) with 200 chars of output each. | `src/model.ts`, `src/tool-batch.ts` |
 
 Results of lent Pi tools go to Grok complete, text and image blocks included (`resolveToolResults`).
 
@@ -67,9 +68,14 @@ work onto the MCP loopback. `codemode` is a meta-tool that can call other Pi too
 `generate_image`, which overlaps Grok native image/video tools. Users edit blocked extensions with
 `/grok extensions block|unblock`, persisted to `blockedPiExtensions` in `grok-ws.json`. Runtime Pi tool
 metadata is used when available, so a blocked source or namespace can withhold tools even without a static
-registry entry in this package. `all` and a named allow-list ignore blocked extensions. Grok sees lent tools
-with `pi_`-prefixed MCP names, mapped back to the original Pi tool names when Pi executes them. Grok chooses
-between its own tools and any lent ones.
+registry entry in this package. `all` and a named allow-list ignore blocked extensions. The MCP server is
+named `pi`, so Grok's model calls a lent tool through `use_tool` as `pi__<name>`. Grok admits an MCP tool
+only when that qualified name has one `__`, no `___`, and a tool name of ASCII letters, digits, `_`, and `-`
+(`qualify_mcp_tool_name`, as described in the documentation bundled with Grok Build 1.0.46), so
+`createPiToolRoutes` in `src/tool-policy.ts` lists a Pi name such as `mcp__docs__search` as `mcp_docs_search`
+and maps the call back. The connection routes MCP messages by server ID, not by session ID, so a
+`tools/list` that arrives while `session/new` is still pending reaches Pi (`test/gateway.test.ts`, with the
+fake Grok). Whether the real Grok lists tools before `session/new` returns is unverified. Grok chooses between its own tools and any lent ones.
 
 ## Leader routing and the HTTP relay
 
@@ -115,7 +121,7 @@ These observations come from development runs of the scripts in `scripts/`. Thei
 ## Open items
 
 - Steering: verify the live effect of an interjection on the running turn.
-- Pi skills under the Grok model: Pi expands `/skill:x` into the user message, and Grok receives it as plain text. Grok must translate Pi tool names such as `edit` and `bash` to its own tools. Not yet checked live. Earlier live checks ran with `--no-skills`.
+- Pi skills under the Grok model: Pi expands `/skill:x` into the user message, and Grok receives it as plain text. Grok lists the skills in the shared `.agents/skills` directories itself. Pi's catalog entry (name, description, and `SKILL.md` path) for each skill outside them, such as one a Pi package ships, goes to Grok in the rules, and Grok reads a skill file with its own file tool. Grok must translate Pi tool names such as `edit` and `bash` to its own tools. Not yet checked live. Earlier live checks ran with `--no-skills`.
 - Media: probe `image_edit` and the video result types. Video shows as a path only.
 - Gateway: add a way to restart the gateway on failure or login, for example a user service. Only the leader is supervised now.
 - Tasks: Grok's task tools (`spawn_subagent`, `monitor`, and others) are model tools only. A `/grok tasks` command needs a listing method from Grok.

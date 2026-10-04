@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { createPiToolRoutes, selectPiTools, PI_CORE_TOOL_NAMES, PI_EXTENSION_TOOL_NAMES } from '../src/tool-policy.ts';
+import { callableName, createPiToolRoutes, selectPiTools, PI_CORE_TOOL_NAMES, PI_EXTENSION_TOOL_NAMES } from '../src/tool-policy.ts';
 
 const tools = [
   { name: 'read' },            // core: Grok has read_file
@@ -49,14 +49,15 @@ test('none lends nothing', () => {
   assert.deepEqual(selectPiTools(tools, 'none'), []);
 });
 
-test('Grok-facing Pi tool routes are prefixed and map back to original names', () => {
-  const routes = createPiToolRoutes(
-    [{ name: 'intercom' }, { name: 'lookup' }, { name: 'mcp__docs__search' }],
-    [{ name: 'lookup', namespaceName: 'mcp__docs' }, { name: 'mcp__docs__search', namespaceName: 'mcp__docs' }],
-  );
-  assert.deepEqual(routes.map((route) => [route.exposedName, route.originalName]), [
-    ['pi_intercom', 'intercom'],
-    ['pi_mcp_docs__lookup', 'lookup'],
-    ['pi_mcp_docs__search', 'mcp__docs__search'],
+test('every lent tool gets a name Grok admits, and maps back to the Pi tool', () => {
+  // Grok admits `pi__<name>` only with one `__`, and only letters, digits, `_`, and `-` in <name>.
+  const routes = createPiToolRoutes([{ name: 'intercom' }, { name: 'mcp__docs__search' }, { name: '_private' }, { name: 'docs.search:v2' }, { name: 'mcp_docs_search' }]);
+  assert.deepEqual(routes.map((route) => [callableName(route), route.originalName]), [
+    ['pi__intercom', 'intercom'],
+    ['pi__mcp_docs_search', 'mcp__docs__search'],
+    ['pi__private', '_private'],
+    ['pi__docs_search_v2', 'docs.search:v2'],
+    ['pi__mcp_docs_search_2', 'mcp_docs_search'],
   ]);
+  for (const route of routes) assert.match(callableName(route), /^pi__(?!_)(?:(?!__)[A-Za-z0-9_-])+$/);
 });

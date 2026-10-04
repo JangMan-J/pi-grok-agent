@@ -4,7 +4,9 @@
 //   ... agent leader --leader-socket <path>   hold the leader socket and write <path minus .sock>.lock with this pid
 //   ... agent --leader stdio ...              JSON-RPC over stdio: answers initialize and session/new, emits any
 //                                             message sent as a `test/emit` notification, and appends every
-//                                             response it receives to FAKE_GROK_LOG (one JSON line each)
+//                                             response it receives to FAKE_GROK_LOG (one JSON line each).
+//                                             FAKE_GROK_MCP_LIST=1: lists the session's first MCP server before it
+//                                             answers session/new, as Grok does, and logs the answer as `mcp-tools-list`
 import { appendFileSync, unlinkSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:net';
 import { createInterface } from 'node:readline';
@@ -24,8 +26,8 @@ if (args.includes('leader')) {
   const log = process.env.FAKE_GROK_LOG;
   const send = (message: unknown) => process.stdout.write(JSON.stringify(message) + '\n');
   const lines = createInterface({ input: process.stdin });
-  lines.on('line', (line) => {
-    let message: Record<string, unknown>;
+  lines.on('line', async (line) => {
+    let message: Record<string, any>;
     try { message = JSON.parse(line); } catch { return; }
     if (message.method === 'test/emit') { send(message.params); return; }
     // Signed in, Grok offers cached_token. FAKE_GROK_LOGGED_OUT=1 offers only the interactive method, as a real logged-out Grok does.
@@ -38,6 +40,11 @@ if (args.includes('leader')) {
     if (message.method === 'session/new') {
       const models = (process.env.FAKE_GROK_MODELS ?? '').split(',').filter(Boolean);
       const configOptions = models.length ? [{ id: 'model', currentValue: models[0], options: models.map((value) => ({ value, name: value })) }] : undefined;
+      const mcpUrl = message.params?.mcpServers?.[0]?.url;
+      if (process.env.FAKE_GROK_MCP_LIST === '1' && mcpUrl && log) {
+        const answer = await fetch(mcpUrl, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/list' }) }).then((r) => r.json());
+        appendFileSync(log, JSON.stringify({ ...answer, id: 'mcp-tools-list' }) + '\n');
+      }
       send({ jsonrpc: '2.0', id: message.id, result: { sessionId: 'fake-session', ...(configOptions ? { configOptions } : {}) } }); return;
     }
     if (message.method === 'session/set_config_option') { if (log) appendFileSync(log, JSON.stringify({ id: 'set_config_option', params: message.params }) + '\n'); send({ jsonrpc: '2.0', id: message.id, result: {} }); return; }

@@ -151,30 +151,33 @@ export function selectPiTools<T extends { name: string }>(tools: T[], policy: Pi
   return tools.filter((tool) => allowedPiToolNames.has(tool.name));
 }
 
-function sanitizeToolNamePart(value: string): string {
-  const sanitized = value.replace(/[^A-Za-z0-9_]/gu, '_').replace(/_+/gu, '_').replace(/^_+|_+$/gu, '');
-  const safe = sanitized || 'tool';
-  return /^[A-Za-z_]/u.test(safe) ? safe : `_${safe}`;
+/** The MCP server name the lent tools are registered under. Grok qualifies each tool as `pi__<name>`. */
+export const PI_MCP_SERVER_NAME = 'pi';
+
+/**
+ * Grok admits an MCP tool only when `<server>__<tool>` has exactly one `__`, no `___`, and a tool name of
+ * ASCII letters, digits, `_`, and `-` (`qualify_mcp_tool_name`, per the docs bundled with Grok Build 1.0.46).
+ * It skips any other tool with only a log line, so the model never sees it. A Pi name such as
+ * `mcp__docs__search` is therefore listed as `mcp_docs_search`.
+ */
+function grokToolName(piToolName: string): string {
+  return piToolName.replace(/[^A-Za-z0-9_-]/gu, '_').replace(/_{2,}/gu, '_').replace(/^_+|_+$/gu, '') || 'tool';
 }
 
-function baseExposedName(toolName: string, attribution?: PiToolAttribution): string {
-  if (attribution?.namespaceName) {
-    const namespacePrefix = `${attribution.namespaceName}__`;
-    const localName = toolName.startsWith(namespacePrefix) ? toolName.slice(namespacePrefix.length) : toolName;
-    return `pi_${sanitizeToolNamePart(attribution.namespaceName)}__${sanitizeToolNamePart(localName)}`;
-  }
-  return `pi_${sanitizeToolNamePart(toolName)}`;
+/** The name Grok's model passes to `use_tool` for a lent Pi tool. */
+export function callableName(route: PiToolRoute): string {
+  return `${PI_MCP_SERVER_NAME}__${route.exposedName}`;
 }
 
 export function createPiToolRoutes<T extends { name: string }>(tools: readonly T[], attributions?: readonly PiToolAttribution[]): PiToolRoute[] {
   const byName = attributionByName(attributions);
-  const used = new Map<string, number>();
+  const taken = new Set<string>();
   return tools.map((tool) => {
-    const attribution = byName.get(tool.name);
-    const base = baseExposedName(tool.name, attribution);
-    const count = used.get(base) ?? 0;
-    used.set(base, count + 1);
-    return { originalName: tool.name, exposedName: count === 0 ? base : `${base}_${count + 1}`, attribution };
+    const base = grokToolName(tool.name);
+    let exposedName = base;
+    for (let n = 2; taken.has(exposedName); n++) exposedName = `${base}_${n}`;
+    taken.add(exposedName);
+    return { originalName: tool.name, exposedName, attribution: byName.get(tool.name) };
   });
 }
 

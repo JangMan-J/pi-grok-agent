@@ -4,7 +4,7 @@
 import { createAssistantMessageEventStream, getCurrentSystemPrompt, getCurrentTools, type AssistantMessage, type AssistantMessageEventStream, type Message, type Model, type Api, type SimpleStreamOptions, type ToolCall, type ToolResultMessage, type TranscriptContext, type Usage } from '@earendil-works/pi-ai';
 import type { GrokModelConnection } from './connection.ts';
 import { GrokModelSession, type TurnEvent, type GrokTurnUsage } from './session.ts';
-import { createPiToolRoutes, selectPiTools, type PiToolAttribution, type PiToolPolicy } from '../tool-policy.ts';
+import { callableName, createPiToolRoutes, descriptionForPiTool, selectPiTools, type PiToolAttribution, type PiToolPolicy } from '../tool-policy.ts';
 
 /** Same marker as model.ts; kept here to avoid importing the extension entry from the provider. */
 const GROK_DISPLAY_ONLY = '\u200b[grok-display]';
@@ -39,7 +39,7 @@ export const GROK_API = 'grok-acp' as Api;
 export const MODEL_IDS = ['grok-4.7', 'grok-4.7-build-fast', 'grok-4.6', 'grok-4.5'];
 const BATCH_GRACE_MS = 150;
 const PREAMBLE_LIMIT = 60_000;
-const PI_HARNESS_PROMPT_SECTIONS = ['tools', 'rules', 'docs', 'skills'];
+const PI_HARNESS_PROMPT_SECTIONS = ['tools', 'rules', 'docs'];
 
 export interface SessionResolver { current(): GrokModelSession | undefined; piTools?: PiToolPolicy; blockedPiExtensions?: Iterable<string>; getPiToolAttributions?: () => readonly PiToolAttribution[]; }
 
@@ -60,18 +60,34 @@ function removeXmlSection(text: string, tag: string): string {
   return kept.join('\n');
 }
 
+/** A lent Pi tool: the name Grok's model passes to `use_tool`, and the name Pi and its skills use. */
+export type LentTool = { callableName: string; piName: string; description: string };
+
 /**
  * Pi's system prompt describes Pi's own harness tools. Grok does not receive those tool schemas, so sending
  * that prose makes Grok believe tools such as codemode/read/edit are callable when they are not. Keep project
  * and user context, but strip Pi-harness catalog/rule sections before sending `_meta.rules` to Grok.
+ *
+ * Pi's skill catalog keeps the skills Grok cannot find. Grok lists every skill under `.agents/skills` itself,
+ * the directory Pi shares with it, and never looks in a Pi package. Each remaining entry gives the SKILL.md
+ * path, which Grok reads with its own file tool.
+ *
+ * Grok never puts MCP tools in its model's function list and never names them in its own MCP reminder: the
+ * model finds them with `search_tool` and calls them with `use_tool`. The bridge therefore lists each lent
+ * tool under the exact name `use_tool` accepts.
  */
-export function grokRulesFromPiPrompt(systemPrompt: string | undefined): string | undefined {
+export function grokRulesFromPiPrompt(systemPrompt: string | undefined, lentTools: readonly LentTool[] = []): string | undefined {
   let prompt = systemPrompt ?? '';
   for (const section of PI_HARNESS_PROMPT_SECTIONS) prompt = removeXmlSection(prompt, section);
+  prompt = prompt.replace(/[ \t]*<skill(?:\s[^>]*)?>[\s\S]*?<\/skill>\n?/gu, (entry) => (/<location>[^<]*[\\/]\.agents[\\/]skills[\\/]/u.test(entry) ? '' : entry));
+  if (!/<skill(?:\s[^>]*)?>/u.test(prompt)) prompt = removeXmlSection(prompt, 'skills');
   prompt = prompt.replace(/\n{3,}/gu, '\n\n').trim();
   const bridge = [
     'You are Grok Build running under Pi. Use Grok native tools for files, shell, search, code navigation, images, permissions, subagents, and other harness features.',
-    'Pi may lend extra tools over MCP; those callable tools are explicitly named with a pi_ prefix. Do not call or refer to unprefixed Pi harness tools unless they appear in your callable tool schema list.',
+    ...(lentTools.length ? [
+      'Pi lends the tools below over the MCP server named pi. They are not in your function list. Call one with use_tool and the exact tool_name shown; call search_tool first to get its input schema. Skills and instructions refer to a lent tool by its Pi name: the part after pi__, unless the line gives another. No other Pi tool is callable.',
+      ...lentTools.map((tool) => `- ${tool.callableName}${tool.callableName.endsWith(`__${tool.piName}`) ? '' : ` (Pi name ${tool.piName})`}: ${tool.description.trim().split('\n')[0].slice(0, 200)}`),
+    ] : ['Pi lends no tools in this session. Tool names from the Pi harness are not callable.']),
   ].join('\n');
   return prompt ? `${bridge}\n\n${prompt}` : bridge;
 }
@@ -165,7 +181,8 @@ export function createGrokStream(connection: GrokModelConnection, sessions: Sess
       session.piToolAttributions = piToolAttributions;
       session.tools = selectPiTools(piTools, sessions.piTools ?? 'extensions', sessions.blockedPiExtensions, piToolAttributions);
       session.piToolRoutes = createPiToolRoutes(session.tools, piToolAttributions);
-      await session.attach(grokRulesFromPiPrompt(getCurrentSystemPrompt(context.messages) || undefined));
+      const lentTools = session.piToolRoutes.map((route, index) => ({ callableName: callableName(route), piName: route.originalName, description: descriptionForPiTool(session.tools[index]) }));
+      await session.attach(grokRulesFromPiPrompt(getCurrentSystemPrompt(context.messages) || undefined, lentTools));
       await session.applyModel(model.id); // before the effort: grok-4.5 has no xhigh
       await session.applyEffort(options?.reasoning); // Pi's thinking level drives Grok's reasoning_effort
       signal?.throwIfAborted();

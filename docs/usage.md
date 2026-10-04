@@ -26,7 +26,8 @@ This page is the reference for settings, commands, and operation. Start with the
 
 | Component | Source | Function |
 | --- | --- | --- |
-| Pi extension | `src/model.ts` | Registers provider `grok`, the `/grok` command, the steer handler, and the renderers for `grok-tool`, `grok-media`, `grok-steer`, and `grok-command`. |
+| Pi extension | `src/model.ts` | Registers provider `grok`, the `/grok` command, the steer handler, and the renderers for `grok-tool`, `grok-tools`, `grok-media`, `grok-steer`, and `grok-command`. |
+| Tool rows | `src/tool-batch.ts` | Groups routine Grok tool calls into `grok-tools` rows. A failure, denial, media result, or post-edit note gets its own `grok-tool` row; it first writes the calls batched before it, so rows keep call order. |
 | Stream adapter | `src/model/provider.ts` | Turns a Pi turn into an ACP `session/prompt` and turns ACP updates into Pi stream events. |
 | Connection | `src/model/connection.ts` | One WebSocket to the gateway. Creates or loads Grok sessions and routes reverse requests. |
 | Session state | `src/model/session.ts` | Turn state, hook answers, lent tool calls, media copies, usage totals. |
@@ -96,7 +97,7 @@ The steer handler acts only while the active model is `grok/*`. After a switch t
 
 | Command | Effect |
 | --- | --- |
-| `/grok debug` | Shows the gateway URL and connection state, the Grok session ID, Grok mode, Pi permission mode, Grok context size, usage and cost totals, lent tools, blocked Pi extensions and the tools they withhold, and hook decision counts. |
+| `/grok debug` | Shows the gateway URL and connection state, the Grok session ID, Grok mode, Pi permission mode, Grok context size, usage and cost totals, lent tools, blocked Pi extensions and the tools they withhold, recent hook decision counts, and the number of Grok tool calls seen. |
 | `/grok login` | Runs `grok login --device-auth` in the background and shows the URL and code as an entry and a notice. Grok may open the page itself, in your default browser. Approve it there; Pi reports when the login finished. Works before any Grok session exists. A running gateway picks up the new login on the next turn, without a restart. |
 | `/grok perms` | Shows the Pi permission mode. |
 | `/grok perms auto` | Default. Mirrors the Pi session's tools onto Grok's tools. |
@@ -110,7 +111,7 @@ The steer handler acts only while the active model is `grok/*`. After a switch t
 
 `/grok goal` and `/grok compact` run through the same prompt lifetime as a normal turn. While one runs, the session is busy: a second command reports `Grok is busy with a turn`, and a normal message waits. A command times out after 10 minutes. The timeout cancels the prompt on Grok (`session/cancel`) and frees the session, and a late reply from the cancelled prompt is dropped.
 
-The `perms` mode applies to Grok tool calls through the `pre_tool_use` hook, before Grok's own permission rules. It lasts for the Pi process. It does not change `grokMode` or `headlessPermissions`.
+The `perms` mode applies to Grok tool calls through the `pre_tool_use` hook, before Grok's own permission rules. A chosen mode persists as `permissionMode` in `grok-ws.json` and applies to every session from the next Pi load. It does not change `grokMode` or `headlessPermissions`.
 
 ## Grok permission prompts
 
@@ -172,7 +173,9 @@ Edit blocked Pi extensions with `/grok extensions`:
 
 Edits persist to `blockedPiExtensions` in `grok-ws.json` and take effect on the next Grok session (Grok reads the tool list once per session). A `blockedPiExtensions` list in the file is authoritative: it replaces the package defaults, so `/grok extensions unblock` can drop a default and it stays dropped. Runtime tool metadata from Pi is used when available, so `/grok extensions block <name>` can block a source or namespace even when this package has no static registry for it.
 
-Grok sees an offered tool as `pi_<name>`, or `pi_<namespace>__<name>` when Pi exposes a namespace. The Pi assistant message still uses the original Pi tool name. Pi executes the tool through its own loop and permission gates, and the same Grok turn continues with the result. Pi passes the complete tool result to Grok.
+Grok's model calls a lent tool through `use_tool` with the name `pi__<name>`. Grok skips an MCP tool whose `server__tool` key has more than one `__`, contains `___`, or has a tool name with a character other than an ASCII letter, a digit, `_`, or `-` (the MCP catalog rules in the documentation bundled with Grok Build 1.0.46). Pi names that obey those rules are used as is. In other names, each other character becomes `_`, runs of `_` become one `_`, and leading and trailing `_` are removed; a clash gets a `_2` suffix (`createPiToolRoutes` in `src/tool-policy.ts`). Pi's `mcp__docs__search` is `pi__mcp_docs_search`, and the rules give its Pi name next to it. Grok does not show MCP tool names to its model, so the rules Pi sends to Grok list each lent tool by its `pi__` name (`grokRulesFromPiPrompt` in `src/model/provider.ts`). `/grok debug` shows the same names.
+
+The Pi assistant message uses the Pi tool name. Pi executes the tool through its own loop and permission gates, and the same Grok turn continues with the result. Pi passes the complete tool result to Grok.
 
 The gateway serves the lent tools as an HTTP MCP server at `http://127.0.0.1:2419/mcp/<token>`. It relays each MCP message to the Pi connection that registered the token. Grok connects to that server with its own MCP client, so the stock `grok` binary works.
 
@@ -205,7 +208,7 @@ Built-in post-edit checks:
 
 Precedence: `denyGrokTools`, then `allowGrokTools`, then the capability mirror, where a tool's `_meta` read-only marker and `mcpReadOnlyServers` apply to MCP tools. `/grok perms` changes the capabilities that the mirror uses, so `denyGrokTools` wins in every mode. In `ask` mode, an allowed edit or shell call then gets a Pi confirm dialog. Hook errors fail open, as Grok's own hooks do.
 
-Each completed Grok tool call becomes a consolidated `grok-tool` session entry with the tool, input, status, output (up to 8000 characters), and duration. The transcript shows one line for each call. The expanded view shows up to 600 characters of output. Turn usage is not a separate entry: the provider puts it on the assistant message in Pi's convention (`input` excludes cached reads; `cacheRead` separate), where Pi and zentui's Turn summary and footer cache figure already show it. Setup, MCP readiness, model switches, and intermediate tool phases are silent. No model receives these entries.
+Each completed Grok tool call becomes a consolidated session entry with the tool, input, status, output (up to 8000 characters), and duration. Routine completions batch into one `grok-tools` row per 10 calls (`N calls (2 read_file · 1 grep)` plus total ms; leftovers flush at turn end). Failures, denials, media captures, and post-edit notes keep their own `grok-tool` rows. The expanded batch view shows each call with up to 200 characters of output; the expanded single view shows up to 600. Turn usage is not a separate entry: the provider puts it on the assistant message in Pi's convention (`input` excludes cached reads; `cacheRead` separate), where Pi and zentui's Turn summary and footer cache figure already show it. Setup, MCP readiness, model switches, and intermediate tool phases are silent. No model receives these entries.
 
 ## Gateway guard
 
@@ -267,6 +270,8 @@ Optional settings file: `~/.pi/agent/grok-ws.json`. If `PI_CODING_AGENT_DIR` is 
 | `autoStartGateway` | `true` (default) or `false`. See [Gateway auto-start](#gateway-auto-start). |
 | `piTools` | `extensions` (default), `none`, `all`, or a comma/list of exact Pi tool names. See [Lent Pi tools](#lent-pi-tools). |
 | `blockedPiExtensions` | Effective blocked extension/tool-surface list for `piTools: "extensions"`. If present, replaces the package defaults. |
+| `permissionMode` | Pi-side permission mode set by `/grok perms`: `yolo`, `auto` (default), `ask`, or `readonly`. |
+| `toolBatchSize` | Routine native tool completions summarized per `grok-tools` batch row. Positive integer, default 10. Leftovers flush at turn end, before tree navigation, and when the session ends. Read when Pi loads the extension: reload Pi after a change. |
 | `grokMode` | Grok's own permission mode: `default`, `auto`, or `yolo`. Sent each time Pi attaches a Grok session. Separate from `/grok perms`. See [Grok permission prompts](#grok-permission-prompts). |
 | `hooks.denyGrokTools`, `hooks.allowGrokTools` | Regular expressions that match the whole Grok tool name. |
 | `hooks.mcpReadOnlyServers` | MCP server names whose tools count as read-only. |

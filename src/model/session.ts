@@ -5,9 +5,9 @@
 import type { SessionNotification, PromptResponse, RequestPermissionRequest, RequestPermissionResponse } from '@agentclientprotocol/sdk';
 import type { Tool, ToolResultMessage } from '@earendil-works/pi-ai';
 import type { GrokModelConnection, McpToolDefinition, SdkCall } from './connection.ts';
-import { descriptionForPiTool, type PiToolAttribution, type PiToolRoute } from '../tool-policy.ts';
+import { descriptionForPiTool, PI_MCP_SERVER_NAME, type PiToolAttribution, type PiToolRoute } from '../tool-policy.ts';
 import { capabilityGate, postEditContext, stopGate, classify, mcpServerOf, type GrokToolStamp, type HookRun, type HookReply } from './hooks.ts';
-import type { HookSettings } from '../config.ts';
+import type { HookSettings, PiPermissionMode } from '../config.ts';
 import { copyFileSync, existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { basename, extname, isAbsolute, join, resolve } from 'node:path';
 
@@ -90,13 +90,19 @@ export class GrokModelSession {
    * write, and bash, with no Pi dialog, and a Grok permission prompt is answered allow once. `denyGrokTools` still
    * applies. `ask_user_question` still opens a dialog. Headless Pi treats `ask` as `readonly`.
    */
-  permissionMode: 'yolo' | 'auto' | 'ask' | 'readonly' = 'auto';
+  permissionMode: PiPermissionMode = 'auto';
   /** Dialog used by `ask` mode; set by the extension when Pi has a UI. */
   askDialog?: (tool: string, input: unknown) => Promise<boolean>;
   /** Directory for project copies of Grok media (relative to cwd, or absolute). Empty disables copying. */
   mediaDir = '.pi/grok-images';
   /** Hook decisions this session made, for evidence and tests. */
   readonly hookLog: { event: string; tool?: string; decision?: string; reason?: string; context?: string }[] = [];
+  /** Grok tool calls seen by the pre_tool_use hook in this session (hookLog keeps only the recent entries). */
+  toolCallsSeen = 0;
+  private logHook(entry: GrokModelSession['hookLog'][number]): void {
+    this.hookLog.push(entry);
+    if (this.hookLog.length > HOOK_LOG_LIMIT) this.hookLog.splice(0, this.hookLog.length - HOOK_LOG_LIMIT);
+  }
   /** Receives one structured record per Grok-native tool call (from the hook pairs). */
   onToolRecord?: (record: GrokToolRecord) => void;
   /** Receives visible, display-only Grok activity records. */
@@ -145,7 +151,7 @@ export class GrokModelSession {
       this.reconnected = this.connection.lastDrop ?? 'reconnected';
     }
     const { sessionId, response } = await this.connection.attachSession({
-      sessionId: this.grokSessionId, cwd: this.cwd, serverId: this.serverId, serverName: 'pi', rules,
+      sessionId: this.grokSessionId, cwd: this.cwd, serverId: this.serverId, serverName: PI_MCP_SERVER_NAME, rules,
       offerPiTools: this.tools.length > 0, grokMode: this.grokMode,
       handlers: { onUpdate: (n) => this.onUpdate(n), onMcp: (m) => this.onMcp(m), onPermission: (r) => this.permission(r), onHookRun: (p, gate) => this.onHookRun(p, gate), onHookEvent: (p) => { void this.onHookRun(p); }, onQuestion: (q) => this.ask(q), onSessionExt: (u) => this.onSessionExt(u) },
     });
@@ -385,7 +391,8 @@ export class GrokModelSession {
             if (!ok) verdict = { allow: false, reason: `The user declined ${tool}.` };
           }
           const reply: HookReply = verdict.allow ? { decision: 'continue' } : { decision: 'deny', reason: verdict.reason };
-          this.hookLog.push({ event: 'pre_tool_use', tool, decision: reply.decision, reason: reply.reason });
+          this.toolCallsSeen++;
+          this.logHook({ event: 'pre_tool_use', tool, decision: reply.decision, reason: reply.reason });
           if (!verdict.allow) this.onToolRecord?.({ toolUseId: payload.toolUseId ?? '', tool, input: payload.toolInput, status: 'denied', denyReason: verdict.reason });
           return reply;
         }
@@ -393,7 +400,7 @@ export class GrokModelSession {
           const tool = payload.toolName ?? '';
           let context: string | undefined;
           if (classify(tool, this.stamps.get(payload.toolUseId ?? '')) === 'write') context = await postEditContext(payload.toolInput, payload.cwd || this.cwd, this.hookSettings);
-          this.hookLog.push({ event: 'post_tool_use', tool, decision: 'continue', context });
+          this.logHook({ event: 'post_tool_use', tool, decision: 'continue', context });
           const source = mediaPath(payload.toolResult);
           const media = source ? this.copyMedia(source) : undefined;
           this.onToolRecord?.({ toolUseId: payload.toolUseId ?? '', tool, input: payload.toolInput, status: 'completed', output: media ?? resultText(payload.toolResult), durationMs: payload.durationMs, hookContext: context, mediaPath: media ?? source, sourcePath: source });
@@ -407,7 +414,7 @@ export class GrokModelSession {
         }
         case 'stop': {
           const reply = await stopGate(payload, this.hookSettings);
-          this.hookLog.push({ event: 'stop', decision: reply.decision, reason: reply.reason });
+          this.logHook({ event: 'stop', decision: reply.decision, reason: reply.reason });
           return reply;
         }
         default:
@@ -415,7 +422,7 @@ export class GrokModelSession {
       }
     } catch (error) {
       const reason = `hook error: ${error instanceof Error ? error.message : String(error)}`;
-      this.hookLog.push({ event: payload.hookEventName, decision: 'continue', reason });
+      this.logHook({ event: payload.hookEventName, decision: 'continue', reason });
       return { decision: 'continue' }; // fail open, like Grok's own hooks
     }
   }
@@ -443,15 +450,15 @@ export class GrokModelSession {
   private onMcp(message: SdkCall): Promise<unknown> {
     switch (message.method) {
       case 'initialize':
-        return Promise.resolve({ protocolVersion: message.params?.protocolVersion ?? '2025-06-18', capabilities: { tools: {} }, serverInfo: { name: 'pi', version: '0.1.0' } });
+        return Promise.resolve({ protocolVersion: message.params?.protocolVersion ?? '2025-06-18', capabilities: { tools: {} }, serverInfo: { name: PI_MCP_SERVER_NAME, version: '0.1.0' } });
       case 'tools/list':
         return Promise.resolve({ tools: this.tools.map((tool) => toMcpTool(tool, this.piToolRoutes.find((route) => route.originalName === tool.name))) });
       case 'tools/call': {
-        const exposedName = String(message.params?.name ?? '');
-        const route = this.piToolRoutes.find((candidate) => candidate.exposedName === exposedName) ?? this.piToolRoutes.find((candidate) => candidate.originalName === exposedName);
-        const name = route?.originalName ?? exposedName;
+        // Grok sends the name from tools/list here. Only its model uses the `pi__` qualifier, in `use_tool`.
+        const listedName = String(message.params?.name ?? '');
+        const name = this.piToolRoutes.find((route) => route.exposedName === listedName)?.originalName ?? listedName;
         const args = (message.params?.arguments ?? {}) as Record<string, unknown>;
-        if (!this.tools.some((t) => t.name === name)) return Promise.reject(new Error(`Unknown Pi tool ${exposedName}`));
+        if (!this.tools.some((t) => t.name === name)) return Promise.reject(new Error(`Unknown Pi tool ${listedName}`));
         const toolCallId = `grok_${this.serverId}_${++this.toolSeq}`;
         return new Promise((resolve, reject) => {
           this.parked.set(toolCallId, { resolve, reject });
@@ -486,6 +493,7 @@ export function resultText(value: unknown, limit = 8000): string | undefined {
   return JSON.stringify(value).slice(0, limit);
 }
 
+const HOOK_LOG_LIMIT = 500;
 const PI_READ_ONLY_TOOLS = new Set(['read', 'grep', 'find', 'ls', 'symbol_search', 'module_report', 'read_symbol', 'read_enclosing', 'lens_diagnostics', 'project_report', 'effective_config']);
 
 /**

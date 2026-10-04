@@ -95,3 +95,44 @@ test('context windows come from Grok Build\'s model cache; bad values and a miss
   await writeFile(file, 'not json');
   assert.deepEqual(grokContextWindows(file), {});
 });
+
+test('tool rows keep call order and flush before tree navigation and shutdown', async (t) => {
+  const dir = await mkdtemp(join(tmpdir(), 'pi-grok-extension-test-'));
+  const oldDir = process.env.PI_CODING_AGENT_DIR;
+  const oldSecret = process.env.GROK_AGENT_SECRET;
+  process.env.PI_CODING_AGENT_DIR = dir;
+  process.env.GROK_AGENT_SECRET = 'test-secret';
+  t.after(async () => {
+    if (oldDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+    else process.env.PI_CODING_AGENT_DIR = oldDir;
+    if (oldSecret === undefined) delete process.env.GROK_AGENT_SECRET;
+    else process.env.GROK_AGENT_SECRET = oldSecret;
+    await rm(dir, { recursive: true, force: true });
+  });
+  const { default: grokModel } = await import('../src/model.ts');
+  const { GrokModelSession } = await import('../src/model/session.ts');
+  const { GrokModelConnection } = await import('../src/model/connection.ts');
+  t.mock.method(GrokModelConnection.prototype, 'close', async () => {});
+  let captured: InstanceType<typeof GrokModelSession> | undefined;
+  t.mock.method(GrokModelSession.prototype, 'detach', function (this: InstanceType<typeof GrokModelSession>) { captured = this; });
+  const entries: [string, unknown][] = [];
+  const handlers = new Map<string, (event: any, ctx: ExtensionContext) => any>();
+  const pi = {
+    on: (name: string, handler: (event: any, ctx: ExtensionContext) => any) => { handlers.set(name, handler); },
+    registerProvider() {}, registerMessageRenderer() {}, registerEntryRenderer() {}, registerCommand() {},
+    appendEntry: (type: string, data: unknown) => { entries.push([type, data]); },
+  } as unknown as ExtensionAPI;
+  await grokModel(pi);
+  const ctx = { cwd: dir, hasUI: false, ui: { notify() {} }, sessionManager: { getSessionId: () => 'pi-test', getBranch: () => [] } } as unknown as ExtensionContext;
+  await handlers.get('session_start')!({}, ctx);
+  await handlers.get('session_tree')!({}, ctx); // detaches the first session, which the mock captures
+  const record = (tool: string, status: 'completed' | 'failed' = 'completed') => captured!.onToolRecord!({ toolUseId: tool, tool, input: {}, status, output: '' });
+  const rows = () => entries.map(([type, data]) => `${type}:${Array.isArray(data) ? data.map((r) => r.tool).join(',') : (data as { tool: string }).tool}`);
+  record('a'); record('b'); record('c', 'failed'); record('d');
+  assert.deepEqual(rows(), ['grok-tools:a,b', 'grok-tool:c'], 'batched calls are written before a later single row');
+  await handlers.get('session_before_tree')!({}, ctx);
+  assert.deepEqual(rows().slice(2), ['grok-tools:d'], 'tree navigation flushes into the branch being left');
+  record('e');
+  await handlers.get('session_shutdown')!({ type: 'session_shutdown', reason: 'new' }, ctx);
+  assert.deepEqual(rows().slice(3), ['grok-tools:e'], 'shutdown flushes before the session is replaced');
+});

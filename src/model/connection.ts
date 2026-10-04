@@ -48,7 +48,9 @@ export class GrokModelConnection {
   private connection?: ClientConnection;
   private initialized?: InitializeResponse;
   private readonly sessions = new Map<string, SessionHandlers>();
-  private readonly servers = new Map<string, string>(); // serverId -> sessionId
+  // serverId -> handlers. Registered before session/new is sent: Grok lists the MCP server's tools while it
+  // creates the session, before Pi knows the session id.
+  private readonly servers = new Map<string, SessionHandlers>();
   private opening?: Promise<void>;
   private closed = false;
   private readonly options: ConnectionOptions & { secretFile?: string; autoStart?: { logDir: string } };
@@ -142,8 +144,7 @@ export class GrokModelConnection {
           this.sessions.get(params.sessionId ?? params.session_id)?.onHookEvent?.(params);
         })
         .onRequest('_x.ai/mcp/sdk_call', (raw) => raw as SdkCallParams, async ({ params }) => {
-          const sessionId = params.sessionId ?? this.servers.get(params.serverId);
-          const handlers = sessionId ? this.sessions.get(sessionId) : undefined;
+          const handlers = this.servers.get(params.serverId) ?? (params.sessionId ? this.sessions.get(params.sessionId) : undefined);
           const { message } = params;
           if (!handlers) return { jsonrpc: '2.0', id: message.id, error: { code: -32001, message: `no session for server ${params.serverId}` } };
           try {
@@ -213,20 +214,27 @@ export class GrokModelConnection {
     }
     if (input.rules) _meta.rules = input.rules;
     const params = { cwd: input.cwd, mcpServers, _meta };
-    this.servers.set(input.serverId, input.sessionId ?? '');
+    // Registered before the request: Grok may list the MCP server's tools while session/new is pending.
+    this.servers.set(input.serverId, input.handlers);
     let session: NewSessionResponse | LoadSessionResponse;
     let sessionId: string;
-    if (input.sessionId) {
-      this.sessions.set(input.sessionId, input.handlers);
-      session = await this.agent.request<LoadSessionResponse>('session/load', { ...params, sessionId: input.sessionId });
-      sessionId = input.sessionId;
-    } else {
-      const created = await this.agent.request<NewSessionResponse>('session/new', params);
-      session = created;
-      sessionId = created.sessionId;
-      this.sessions.set(sessionId, input.handlers);
+    try {
+      if (input.sessionId) {
+        this.sessions.set(input.sessionId, input.handlers);
+        session = await this.agent.request<LoadSessionResponse>('session/load', { ...params, sessionId: input.sessionId });
+        sessionId = input.sessionId;
+      } else {
+        const created = await this.agent.request<NewSessionResponse>('session/new', params);
+        session = created;
+        sessionId = created.sessionId;
+        this.sessions.set(sessionId, input.handlers);
+      }
+    } catch (error) {
+      // No session exists: a late MCP call or update must not reach these handlers.
+      if (this.servers.get(input.serverId) === input.handlers) this.servers.delete(input.serverId);
+      if (input.sessionId && this.sessions.get(input.sessionId) === input.handlers) this.sessions.delete(input.sessionId);
+      throw error;
     }
-    this.servers.set(input.serverId, sessionId);
     return { sessionId, response: session };
   }
 

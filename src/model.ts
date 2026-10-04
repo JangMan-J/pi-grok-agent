@@ -6,7 +6,7 @@ import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { extname, join } from 'node:path';
-import { agentDir, readConfig } from './config.ts';
+import { agentDir, readConfig, writeConfig, type PiPermissionMode } from './config.ts';
 import { grokLogin } from './login.ts';
 import { permissionAnswer, permissionDialog } from './model/permissions.ts';
 import { questionAnswerer } from './model/questions.ts';
@@ -15,7 +15,8 @@ import { GrokModelSession, type GrokToolRecord } from './model/session.ts';
 import { createGrokStream, GROK_API, MODEL_IDS } from './model/provider.ts';
 import { createSteerHandler } from './model/steer.ts';
 import { handleExtensionsCommand } from './model/extensions-command.ts';
-import { blockedToolNamesForExtensions, sortedNames, toolNamesForExtension, type PiToolAttribution } from './tool-policy.ts';
+import { blockedToolNamesForExtensions, callableName, sortedNames, toolNamesForExtension, type PiToolAttribution } from './tool-policy.ts';
+import { createToolBatcher, TOOL_BATCH_ENTRY } from './tool-batch.ts';
 
 type SavedModelSession = { owner: string; grokSessionId: string; serverId: string; cwd: string };
 const ENTRY = 'grok-model-session';
@@ -78,10 +79,17 @@ export default async function grokModel(pi: ExtensionAPI) {
   const blockedPiExtensions = new Set(config.blockedPiExtensions);
   const connection = new GrokModelConnection({ url: config.url, secret: config.secret, secretFile: config.secretFile, autoStart: config.autoStartGateway ? { logDir: agentDir } : undefined });
   let current: GrokModelSession | undefined;
-  let permissionMode: 'yolo' | 'auto' | 'ask' | 'readonly' = 'auto';
+  // Pi-side permission mode, persisted as `permissionMode` in grok-ws.json so a chosen `/grok perms`
+  // survives Pi restarts. Applied to every Grok session in configure().
+  let permissionMode: PiPermissionMode = config.permissionMode;
   // Media generated during a turn; flushed as one `grok-media` message after the turn so Pi renders the images
   // through its normal message path (inline, like an attached image) instead of inside the tool card.
   const pendingMedia: GrokToolRecord[] = [];
+  // Routine native tool completions accumulate here and flush as one `grok-tools` summary row per few
+  // calls, so a long autonomous burst does not stack one row per call. Interesting records (failures,
+  // denials, media, post-edit notes) bypass the batcher and render as their own `grok-tool` rows.
+  const toolBatcher = createToolBatcher((records) => pi.appendEntry<GrokToolRecord[]>(TOOL_BATCH_ENTRY, records), config.toolBatchSize);
+  const flushTools = () => toolBatcher.flush();
   function flushMedia() {
     const records = pendingMedia.splice(0);
     for (const r of records) {
@@ -117,8 +125,11 @@ export default async function grokModel(pi: ExtensionAPI) {
     session.grokMode = config.grokMode;
     session.permissionMode = permissionMode;
     session.askDialog = ctx.hasUI ? async (tool, input) => (await ctx.ui.confirm(`Grok wants to run ${tool}`, JSON.stringify(input ?? {}, null, 2).slice(0, 2000))) === true : undefined;
+    // Routine completions batch into one `grok-tools` row per few calls; failures, denials,
+    // media, and post-edit notes keep their own `grok-tool` rows. Leftovers flush at turn end.
     session.onToolRecord = (record) => {
-      pi.appendEntry<GrokToolRecord>(TOOL_ENTRY, record);
+      // A single row flushes the calls batched before it, so the transcript keeps call order.
+      if (!toolBatcher.record(record)) { flushTools(); pi.appendEntry<GrokToolRecord>(TOOL_ENTRY, record); }
       if (record.mediaPath) pendingMedia.push(record);
     };
     return session;
@@ -155,14 +166,16 @@ export default async function grokModel(pi: ExtensionAPI) {
     })),
     streamSimple: (model, context, options) => {
       const before = current?.grokSessionId;
+      flushTools(); // late records from the previous turn stay with that turn
       const out = stream(model, context, options);
       // Persist the Grok session id once it exists so reloads can session/load it, and surface media generated this turn.
       void out.result().then((message) => {
+        flushTools();
         if (current && current.grokSessionId && current.grokSessionId !== before) {
           pi.appendEntry(ENTRY, { owner: current.piSessionId, grokSessionId: current.grokSessionId, serverId: current.serverId, cwd: current.cwd } satisfies SavedModelSession);
         }
         if (message.stopReason !== 'toolUse') flushMedia(); // a toolUse stop continues the same Grok turn; wait for its end
-      }).catch(() => {});
+      }).catch(() => { flushTools(); });
       return out;
     },
   });
@@ -234,6 +247,21 @@ export default async function grokModel(pi: ExtensionAPI) {
     return box;
   });
 
+  pi.registerEntryRenderer<GrokToolRecord[]>(TOOL_BATCH_ENTRY, (entry, { expanded }, theme) => {
+    const records = entry.data; if (!records?.length) return undefined;
+    const counts = new Map<string, number>();
+    let ms = 0;
+    for (const r of records) { counts.set(r.tool, (counts.get(r.tool) ?? 0) + 1); ms += r.durationMs ?? 0; }
+    const summary = [...counts].map(([tool, n]) => (n > 1 ? `${n} ${tool}` : tool)).join(' · ');
+    const box = new Box(1, 0, (text: string) => theme.bg('customMessageBg', text));
+    box.addChild(new Text(`${theme.fg('success', STATUS_ICON.completed)} ${theme.fg('accent', 'grok')} ${records.length} calls (${summary})${ms ? theme.fg('dim', ` ${ms}ms`) : ''}`, 0, 0));
+    if (expanded) for (const r of records) {
+      box.addChild(new Text(theme.fg('dim', `  ${r.tool} ${oneLine(r.input, 100)}${r.durationMs != null ? ` ${r.durationMs}ms` : ''}`), 0, 0));
+      if (r.output) box.addChild(new Text(theme.fg('dim', `    ${oneLine(r.output, 200)}`), 0, 0));
+    }
+    return box;
+  });
+
   // Turn usage is not rendered as its own entry: it duplicated what Pi (and
   // zentui's Turn summary / footer cache figure) already show from the usage
   // the provider puts on the assistant message, and Grok's own accounting
@@ -299,10 +327,11 @@ export default async function grokModel(pi: ExtensionAPI) {
               `mode: ${session.mode}${session.promptActive ? ' (turn running)' : ''}; pi perms: ${session.permissionMode}; grok mode: ${session.grokMode}`,
               `grok context: ${session.lastContextTokens != null ? `${session.lastContextTokens.toLocaleString()} / ${contextWindowFor(session.grokModel).toLocaleString()}` : 'unknown'}`,
               `usage: ${u.turns} turns, ${u.inputTokens.toLocaleString()} in (${u.cachedReadTokens.toLocaleString()} cached), ${u.outputTokens.toLocaleString()} out, $${u.costUsd.toFixed(3)}`,
-              `lent Pi tools: ${session.piToolRoutes.length ? session.piToolRoutes.map((route) => `${route.exposedName} → ${route.originalName}`).join(', ') : 'none'}`,
+              `lent Pi tools: ${session.piToolRoutes.length ? session.piToolRoutes.map((route) => (route.exposedName === route.originalName ? callableName(route) : `${callableName(route)} → ${route.originalName}`)).join(', ') : 'none'}`,
               `blocked Pi extensions: ${blockedPiExtensions.size ? sortedNames(blockedPiExtensions).join(', ') : 'none'}`,
               `withheld Pi extension tools: ${withheldPiTools.join(', ') || 'none'}`,
-              `hook decisions: ${session.hookLog.length} (${denied} denied); pending lent-tool calls: ${session.pendingToolCallIds.length}`,
+              `recent hook decisions: ${session.hookLog.length} (${denied} denied); pending lent-tool calls: ${session.pendingToolCallIds.length}`,
+              `Grok tool calls seen: ${session.toolCallsSeen} (pre_tool_use hooks; a grok-tools row holds up to ${config.toolBatchSize} calls)`,
             ].join('\n'));
             return;
           }
@@ -310,12 +339,13 @@ export default async function grokModel(pi: ExtensionAPI) {
             if (!tail) { ctx.ui.notify(`Grok permission mode: ${permissionMode}`, 'info'); return; }
             const chosen = tail === 'read-only' ? 'readonly' : tail;
             if (!['yolo', 'auto', 'ask', 'readonly'].includes(chosen)) throw new Error('Usage: /grok perms yolo | auto | ask | read-only');
-            permissionMode = chosen as typeof permissionMode; session.permissionMode = permissionMode;
-            ctx.ui.notify(`Grok permission mode: ${permissionMode}${permissionMode === 'ask' && !ctx.hasUI ? ' (no UI: behaves as readonly)' : ''}`, 'info'); return;
+            await writeConfig({ permissionMode: chosen as PiPermissionMode }); // save first: a failed write changes nothing
+            permissionMode = chosen as PiPermissionMode; session.permissionMode = permissionMode;
+            ctx.ui.notify(`Grok permission mode: ${permissionMode} (saved)${permissionMode === 'ask' && !ctx.hasUI ? ' (no UI: behaves as readonly)' : ''}`, 'info'); return;
           }
           case 'plan': { const mode = tail === 'off' ? 'default' : 'plan'; if (tail && !['on', 'off'].includes(tail)) throw new Error('Usage: /grok plan on | off'); await session.setMode(mode); ctx.ui.notify(`Grok session mode: ${mode}`, 'info'); return; }
-          case 'goal': { const r = await session.runCommand(`/goal${tail ? ' ' + tail : ''}`, 600_000); show(`/goal${tail ? ' ' + tail : ''}`, r.text); return; }
-          case 'compact': { const r = await session.runCommand(`/compact${tail ? ' ' + tail : ''}`, 600_000); show('/compact', r.text || `done (${r.stopReason})`); return; }
+          case 'goal': { flushTools(); try { const r = await session.runCommand(`/goal${tail ? ' ' + tail : ''}`, 600_000); show(`/goal${tail ? ' ' + tail : ''}`, r.text); } finally { flushTools(); } return; }
+          case 'compact': { flushTools(); try { const r = await session.runCommand(`/compact${tail ? ' ' + tail : ''}`, 600_000); show('/compact', r.text || `done (${r.stopReason})`); } finally { flushTools(); } return; }
           case 'extensions':
             await handleExtensionsCommand({ args: rest, blockedPiExtensions, piTools: config.piTools, getToolNamesForExtension: (name) => toolNamesForExtension(name, getPiToolAttributions()), show, notify: (message) => ctx.ui.notify(message, 'info') });
             return;
@@ -326,6 +356,8 @@ export default async function grokModel(pi: ExtensionAPI) {
   });
 
   pi.on('session_start', (_event, ctx) => restore(ctx));
+  // Flush batched rows while the old session or branch is still current.
+  pi.on('session_before_tree', () => { flushTools(); });
   pi.on('session_tree', (_event, ctx) => { lastCtx = ctx; current?.detach(); current = configure(new GrokModelSession(connection, ctx.sessionManager.getSessionId(), ctx.cwd), ctx); });
-  pi.on('session_shutdown', async () => { current?.detach(); current = undefined; await connection.close(); });
+  pi.on('session_shutdown', async () => { flushTools(); current?.detach(); current = undefined; await connection.close(); });
 }

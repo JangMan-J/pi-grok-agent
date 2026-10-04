@@ -154,6 +154,22 @@ test('ask mode: a slow human confirm is waited for as a dialog, not denied at th
   assert.deepEqual(session.hookLog.map((h) => h.decision), ['continue']);
 });
 
+test('Grok lists the lent Pi tools while session/new is still pending', async (t) => {
+  const s = scratch(); t.after(s.cleanup);
+  const port = await freePort();
+  const gw = startGateway(gatewayEnv(s, port, { FAKE_GROK_MCP_LIST: '1' }));
+  t.after(() => stop(gw.child));
+  await gw.ready();
+  const connection = new GrokModelConnection({ url: `ws://127.0.0.1:${port}/ws`, secret: SECRET });
+  t.after(() => connection.close());
+  const session = new GrokModelSession(connection, 'pi-mcp', s.home);
+  session.tools = [{ name: 'intercom', description: 'Message another session', parameters: { type: 'object', properties: {} } as any }];
+  await session.attach(undefined);
+  const [listed] = received(s, 'mcp-tools-list');
+  assert.equal(listed.error, undefined, `the handshake is answered (${JSON.stringify(listed.error)})`);
+  assert.deepEqual(listed.result.tools.map((tool: { name: string }) => tool.name), ['intercom']);
+});
+
 test('a Grok turn that outlives its Pi session (/new, shutdown) is denied tool use, not waved through', async (t) => {
   const s = scratch(); t.after(s.cleanup);
   const port = await freePort();

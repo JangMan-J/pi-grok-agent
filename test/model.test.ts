@@ -3,6 +3,7 @@ import { test } from 'node:test';
 import { Type } from '@earendil-works/pi-ai';
 import { normalizeContext, type Message, type Model, type Api } from '@earendil-works/pi-ai';
 import { GrokModelSession } from '../src/model/session.ts';
+import { createPiToolRoutes } from '../src/tool-policy.ts';
 import { createGrokStream, splitTail, promptTextFor, grokRulesFromPiPrompt, GROK_API } from '../src/model/provider.ts';
 import type { SessionHandlers } from '../src/model/connection.ts';
 
@@ -41,8 +42,30 @@ test('Grok rules strip Pi harness tool prose but keep project context', () => {
     '<project_context>',
     'Project rule stays.',
     '</project_context>',
-  ].join('\n'))!;
+    '<skills>',
+    '<available_skills>',
+    '  <skill>',
+    '    <name>tdd</name>',
+    '    <location>/home/u/.agents/skills/tdd/SKILL.md</location>',
+    '  </skill>',
+    '  <skill>',
+    '    <name>herdsman</name>',
+    '    <location>/home/u/.pi/agent/npm/node_modules/pi-herdsman/SKILL.md</location>',
+    '  </skill>',
+    '</available_skills>',
+    '</skills>',
+  ].join('\n'), [
+    { callableName: 'pi__intercom', piName: 'intercom', description: 'Message another session.\nSecond line.' },
+    { callableName: 'pi__mcp_docs_search', piName: 'mcp__docs__search', description: 'Search docs' },
+  ])!;
   assert.match(rules, /Grok Build running under Pi/);
+  assert.match(rules, /use_tool/);
+  assert.match(rules, /^- pi__intercom: Message another session\.$/m);
+  assert.match(rules, /^- pi__mcp_docs_search \(Pi name mcp__docs__search\): Search docs$/m);
+  assert.match(rules, /<name>herdsman<\/name>\s+<location>\/home\/u\/\.pi\/agent\/npm\/node_modules\/pi-herdsman\/SKILL\.md/, 'a skill only Pi can find stays in the catalog');
+  assert.doesNotMatch(rules, /tdd/, 'Grok lists the shared .agents/skills itself');
+  assert.doesNotMatch(grokRulesFromPiPrompt('<skills>\n<available_skills>\n  <skill>\n    <location>/home/u/.agents/skills/tdd/SKILL.md</location>\n  </skill>\n</available_skills>\n</skills>')!, /skills/, 'no empty catalog');
+  assert.doesNotMatch(grokRulesFromPiPrompt('<skills>\n  <skill name="tdd">\n    <location>C:\\Users\\u\\.agents\\skills\\tdd\\SKILL.md</location>\n  </skill>\n</skills>')!, /skill/, 'attribute tags and Windows paths are filtered too');
   assert.match(rules, /Project rule stays\./);
   assert.doesNotMatch(rules, /codemode/);
   assert.doesNotMatch(rules, /Use codemode/);
@@ -59,9 +82,9 @@ test('one Grok turn becomes two Pi assistant messages around a Pi tool call', as
   // Wait until Grok received the prompt, then play Grok: text, then a tools/call for Pi's read tool.
   await new Promise<void>((r) => { const i = setInterval(() => { if (fake.calls.some((c) => c.method === 'session/prompt')) { clearInterval(i); r(); } }, 5); });
   const h = fake.handlers();
-  assert.deepEqual(await h.onMcp({ method: 'tools/list', id: 1 }), { tools: [{ name: 'pi_read', description: 'Read a file', inputSchema: structuredClone(readTool.parameters), annotations: { readOnlyHint: true }, _meta: { originalPiToolName: 'read', readOnlyHint: true } }] });
+  assert.deepEqual(await h.onMcp({ method: 'tools/list', id: 1 }), { tools: [{ name: 'read', description: 'Read a file', inputSchema: structuredClone(readTool.parameters), annotations: { readOnlyHint: true }, _meta: { originalPiToolName: 'read', readOnlyHint: true } }] });
   h.onUpdate({ sessionId: 'g1', update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'Reading. ' } } } as any);
-  const toolResultPromise = h.onMcp({ method: 'tools/call', id: 2, params: { name: 'pi_read', arguments: { path: 'token.txt' } } });
+  const toolResultPromise = h.onMcp({ method: 'tools/call', id: 2, params: { name: 'read', arguments: { path: 'token.txt' } } });
   const events1 = await collect(s1);
   const done1 = events1.at(-1);
   assert.equal(done1.type, 'done'); assert.equal(done1.reason, 'toolUse');
@@ -71,6 +94,7 @@ test('one Grok turn becomes two Pi assistant messages around a Pi tool call', as
   const rules = fake.calls.find((c) => c.method === 'session/new')!.params.rules;
   assert.match(rules, /Grok Build running under Pi/);
   assert.match(rules, /You are Pi\./);
+  assert.match(rules, /^- pi__read: Read a file$/m, 'the rules name the lent tool as use_tool takes it');
   assert.equal(fake.calls.find((c) => c.method === 'session/new')!.params.offerPiTools, true);
   assert.match(fake.calls.find((c) => c.method === 'session/prompt')!.params.prompt[0].text, /read token\.txt/);
 
@@ -105,6 +129,21 @@ test('default policy keeps Pi core tools out; Grok native tool updates are not d
   assert.ok(!done.message.content.some((c: any) => c.type === 'toolCall'), 'native Grok tool never becomes a Pi tool call');
   assert.ok(!done.message.content.some((c: any) => c.type === 'thinking'), 'native Grok tool updates stay out of assistant thinking; grok-tool entries render them');
   assert.equal(done.message.content.at(-1).text, 'done');
+});
+
+test('Grok calls a lent tool by its listed name and Pi executes the original', async () => {
+  const fake = fakeConnection();
+  const session = new GrokModelSession(fake.connection, 'pi-names', '/repo');
+  session.tools = [{ name: 'mcp__docs__search', description: 'Search docs', parameters: Type.Object({}) }];
+  session.piToolRoutes = createPiToolRoutes(session.tools);
+  await session.attach(undefined);
+  const events: any[] = [];
+  session.consume((event) => events.push(event));
+  const h = fake.handlers();
+  assert.deepEqual(((await h.onMcp({ method: 'tools/list', id: 1 })) as any).tools.map((tool: any) => tool.name), ['mcp_docs_search']);
+  void h.onMcp({ method: 'tools/call', id: 2, params: { name: 'mcp_docs_search', arguments: { q: 'x' } } });
+  assert.deepEqual(events.map((event) => [event.kind, event.name, event.arguments]), [['toolcall', 'mcp__docs__search', { q: 'x' }]]);
+  await assert.rejects(h.onMcp({ method: 'tools/call', id: 3, params: { name: 'pi__mcp_docs_search', arguments: {} } }), /Unknown Pi tool/);
 });
 
 test('abort cancels the Grok prompt and rejects parked tool calls', async () => {

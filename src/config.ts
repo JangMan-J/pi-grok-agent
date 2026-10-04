@@ -21,6 +21,27 @@ export type HeadlessPermissionPolicy = 'dialog' | 'deny' | 'reads' | 'allow';
 export type GrokMode = 'default' | 'auto' | 'yolo';
 
 /**
+ * Pi-side permission mode for Grok's native tools (`/grok perms`). Persisted as `permissionMode` in
+ * `grok-ws.json` and applied to every session at load. `auto` mirrors Pi's tool set; `readonly` denies
+ * writes and shell; `ask` confirms each edit or shell call; `yolo` allows them with no dialog.
+ */
+export type PiPermissionMode = 'yolo' | 'auto' | 'ask' | 'readonly';
+
+export function parsePermissionMode(value: unknown): PiPermissionMode {
+  if (value === 'yolo' || value === 'auto' || value === 'ask' || value === 'readonly') return value;
+  throw new Error(`permissionMode must be yolo, auto, ask, or readonly (got ${JSON.stringify(value)}).`);
+}
+
+/** Default `toolBatchSize`. Kept here, not in tool-batch.ts, so the gateway build does not pull in the session graph. */
+export const TOOL_BATCH_SIZE = 10;
+
+/** Validated `toolBatchSize` from `grok-ws.json`: routine native tool completions per `grok-tools` batch row. */
+export function parseToolBatchSize(value: unknown): number {
+  if (typeof value === 'number' && Number.isInteger(value) && value > 0) return value;
+  throw new Error(`toolBatchSize must be a positive integer (got ${JSON.stringify(value)}).`);
+}
+
+/**
  * Gateway guard tiers, in milliseconds. Grok fails OPEN when a client hook times out and waits forever on a
  * permission prompt, so the gateway answers on Pi's behalf when Pi cannot. Each value is a deadline after which
  * the gateway answers fail-closed (deny / continue / reject) unless Pi has answered.
@@ -81,7 +102,7 @@ export async function readSecretFile(secretFile: string): Promise<string | undef
 }
 
 export async function readConfig() {
-  let settings: { url?: string; secretFile?: string; piTools?: PiToolPolicy; blockedPiExtensions?: string[]; hooks?: HookSettings; headlessPermissions?: HeadlessPermissionPolicy; guard?: GuardSettings; mediaDir?: string; grokMode?: GrokMode; autoStartGateway?: boolean } = {};
+  let settings: { url?: string; secretFile?: string; piTools?: PiToolPolicy; blockedPiExtensions?: string[]; permissionMode?: PiPermissionMode; toolBatchSize?: number; hooks?: HookSettings; headlessPermissions?: HeadlessPermissionPolicy; guard?: GuardSettings; mediaDir?: string; grokMode?: GrokMode; autoStartGateway?: boolean } = {};
   try { settings = JSON.parse(await readFile(configPath, 'utf8')); }
   catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error; }
   const url = validateEndpoint(process.env.GROK_ACP_URL || settings.url || 'ws://127.0.0.1:2419/ws');
@@ -99,6 +120,8 @@ export async function readConfig() {
   if (process.env.PI_GROK_STOP_CHECK) hooks.stopCheck = process.env.PI_GROK_STOP_CHECK;
   if (process.env.PI_GROK_POST_EDIT_CHECK) hooks.postEditCheck = process.env.PI_GROK_POST_EDIT_CHECK;
   if (process.env.PI_GROK_DENY_TOOLS) hooks.denyGrokTools = process.env.PI_GROK_DENY_TOOLS.split(',').map((s) => s.trim()).filter(Boolean);
+  const permissionMode = parsePermissionMode(settings.permissionMode ?? 'auto');
+  const toolBatchSize = parseToolBatchSize(settings.toolBatchSize ?? TOOL_BATCH_SIZE);
   const headlessPermissions = (process.env.PI_GROK_HEADLESS_PERMISSIONS as HeadlessPermissionPolicy | undefined) ?? settings.headlessPermissions ?? 'dialog';
   if (!['dialog', 'deny', 'reads', 'allow'].includes(headlessPermissions)) throw new Error(`headlessPermissions must be dialog, deny, reads, or allow (got ${headlessPermissions}).`);
   const guard = resolveGuard(settings.guard);
@@ -108,7 +131,7 @@ export async function readConfig() {
   if (!['default', 'auto', 'yolo'].includes(grokMode)) throw new Error(`grokMode must be default, auto, or yolo (got ${grokMode}).`);
   // Start the bundled gateway when nothing listens on the endpoint. PI_GROK_AUTOSTART=0 or autoStartGateway: false turns it off.
   const autoStartGateway = process.env.PI_GROK_AUTOSTART ? !['0', 'false', 'no', 'off'].includes(process.env.PI_GROK_AUTOSTART.toLowerCase()) : settings.autoStartGateway ?? true;
-  return { url, secret, secretFile, piTools, blockedPiExtensions, hooks, headlessPermissions, guard, mediaDir, grokMode, autoStartGateway };
+  return { url, secret, secretFile, piTools, blockedPiExtensions, permissionMode, toolBatchSize, hooks, headlessPermissions, guard, mediaDir, grokMode, autoStartGateway };
 }
 
 /**
