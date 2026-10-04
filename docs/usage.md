@@ -97,7 +97,7 @@ The steer handler acts only while the active model is `grok/*`. After a switch t
 
 | Command | Effect |
 | --- | --- |
-| `/grok debug` | Shows the gateway URL and connection state, the Grok session ID, Grok mode, Pi permission mode, Grok context size, usage and cost totals, lent tools, blocked Pi extensions and the tools they withhold, recent hook decision counts, and the number of Grok tool calls seen. |
+| `/grok debug` | Shows the gateway URL and connection state, the Grok session ID, Grok mode, Pi permission mode, Grok context size, usage and cost totals, blocked Pi extensions, and, after the first Grok turn in this Pi process, the lent tools and the tools the blocked extensions withhold, recent hook decision counts, and the number of Grok tool calls seen. |
 | `/grok login` | Runs `grok login --device-auth` in the background and shows the URL and code as an entry and a notice. Grok may open the page itself, in your default browser. Approve it there; Pi reports when the login finished. Works before any Grok session exists. A running gateway picks up the new login on the next turn, without a restart. |
 | `/grok perms` | Shows the Pi permission mode. |
 | `/grok perms auto` | Default. Mirrors the Pi session's tools onto Grok's tools. |

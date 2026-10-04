@@ -327,8 +327,8 @@ export default async function grokModel(pi: ExtensionAPI) {
               `mode: ${session.mode}${session.promptActive ? ' (turn running)' : ''}; pi perms: ${session.permissionMode}; grok mode: ${session.grokMode}`,
               `grok context: ${session.lastContextTokens != null ? `${session.lastContextTokens.toLocaleString()} / ${contextWindowFor(session.grokModel).toLocaleString()}` : 'unknown'}`,
               `usage: ${u.turns} turns, ${u.inputTokens.toLocaleString()} in (${u.cachedReadTokens.toLocaleString()} cached), ${u.outputTokens.toLocaleString()} out, $${u.costUsd.toFixed(3)}`,
-              // Tool lines describe the tool list a Grok session took at its start; none exists before the first message.
-              ...(session.grokSessionId ? [
+              // Tool lines describe the tool list sent when a Grok turn attached the session; none exists until Grok is called.
+              ...(session.attached ? [
                 `lent Pi tools: ${session.piToolRoutes.length ? session.piToolRoutes.map((route) => (route.exposedName === route.originalName ? callableName(route) : `${callableName(route)} → ${route.originalName}`)).join(', ') : 'none'}`,
                 `withheld Pi extension tools: ${withheldPiTools.join(', ') || 'none'}`,
               ] : []),

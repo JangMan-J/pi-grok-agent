@@ -141,6 +141,8 @@ export class GrokModelSession {
   reconnected?: string;
   /** Connection generation this session was attached under; a newer generation means the socket dropped since. */
   private attachedGeneration = -1;
+  /** True once a Grok turn attached this session in this Pi process (a restored session ID alone does not count). */
+  get attached(): boolean { return this.attachedGeneration >= 0; }
 
   async attach(rules: string | undefined) {
     if (!this.connection.isOpen) await this.connection.open();
