@@ -52,8 +52,24 @@ export type GuardSettings = {
 };
 /** Grok's own client-hook deadline cap (`MAX_HOOK_TIMEOUT_SECS`); every guard tier for hooks must stay below it. */
 export const GROK_HOOK_CAP_MS = 600_000;
-/** Grok's deadline for pre_tool_use as registered by this package (`CLIENT_HOOKS`); ackMs and policyMs must stay below it. */
+/**
+ * Legacy ceiling for `ackMs` and `policyMs`. The registered `PreToolUse` timeout is 600 s (`CLIENT_HOOKS`);
+ * the event-loop watchdog is the live guard. This constant stays so old guard configs still validate.
+ */
 export const GATE_REGISTRATION_MS = 30_000;
+/** Default time the event loop may stay still while a reverse request is open before the child is killed. */
+export const WATCHDOG_STALL_MS = 1_000;
+
+export type WatchdogSettings = { stallMs?: number };
+
+/** `0` disables the watchdog. Env wins over the file. */
+export function resolveWatchdog(settings: WatchdogSettings | undefined, env: NodeJS.ProcessEnv = process.env): number {
+  const raw = env.PI_GROK_WATCHDOG_MS ?? settings?.stallMs;
+  if (raw === undefined || raw === '') return WATCHDOG_STALL_MS;
+  const n = Number(raw);
+  if (!Number.isFinite(n) || n < 0) throw new Error(`watchdog.stallMs must be a non-negative number of milliseconds, or 0 to disable (got ${String(raw)}).`);
+  return Math.floor(n);
+}
 const GUARD_DEFAULTS: Required<GuardSettings> = { ackMs: 5_000, policyMs: 15_000, checkBudgetMs: 590_000, dialogMs: 600_000 };
 
 export function resolveGuard(settings: GuardSettings | undefined, env: NodeJS.ProcessEnv = process.env): Required<GuardSettings> {
@@ -90,7 +106,7 @@ export type HookSettings = {
 };
 
 export async function readConfig() {
-  let settings: { piTools?: PiToolPolicy; blockedPiExtensions?: string[]; permissionMode?: PiPermissionMode; toolBatchSize?: number; hooks?: HookSettings; headlessPermissions?: HeadlessPermissionPolicy; guard?: GuardSettings; mediaDir?: string; grokMode?: GrokMode } = {};
+  let settings: { piTools?: PiToolPolicy; blockedPiExtensions?: string[]; permissionMode?: PiPermissionMode; toolBatchSize?: number; hooks?: HookSettings; headlessPermissions?: HeadlessPermissionPolicy; guard?: GuardSettings; watchdog?: WatchdogSettings; mediaDir?: string; grokMode?: GrokMode } = {};
   try { settings = JSON.parse(await readFile(configPath, 'utf8')); }
   catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error; }
   const piTools: PiToolPolicy = process.env.PI_GROK_PI_TOOLS ? parsePolicy(process.env.PI_GROK_PI_TOOLS) : settings.piTools ?? 'extensions';
@@ -106,11 +122,12 @@ export async function readConfig() {
   const headlessPermissions = (process.env.PI_GROK_HEADLESS_PERMISSIONS as HeadlessPermissionPolicy | undefined) ?? settings.headlessPermissions ?? 'dialog';
   if (!['dialog', 'deny', 'reads', 'allow'].includes(headlessPermissions)) throw new Error(`headlessPermissions must be dialog, deny, reads, or allow (got ${headlessPermissions}).`);
   const guard = resolveGuard(settings.guard);
+  const watchdogStallMs = resolveWatchdog(settings.watchdog);
   // Where Pi copies Grok's generated media. Relative paths resolve against the Pi session cwd. Empty string disables the copy.
   const mediaDir = process.env.PI_GROK_MEDIA_DIR ?? settings.mediaDir ?? '.pi/grok-images';
   const grokMode = (process.env.PI_GROK_GROK_MODE as GrokMode | undefined) ?? settings.grokMode ?? 'default';
   if (!['default', 'auto', 'yolo'].includes(grokMode)) throw new Error(`grokMode must be default, auto, or yolo (got ${grokMode}).`);
-  return { piTools, blockedPiExtensions, permissionMode, toolBatchSize, hooks, headlessPermissions, guard, mediaDir, grokMode };
+  return { piTools, blockedPiExtensions, permissionMode, toolBatchSize, hooks, headlessPermissions, guard, watchdogStallMs, mediaDir, grokMode };
 }
 
 /**

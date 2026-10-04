@@ -3,10 +3,11 @@ import { client, ndJsonStream, type AnyMessage, type ClientConnection, type Init
 import { spawn, type ChildProcessByStdio } from 'node:child_process';
 import { Readable, Writable } from 'node:stream';
 import { join } from 'node:path';
-import { agentDir, GATE_REGISTRATION_MS } from '../config.ts';
+import { agentDir, WATCHDOG_STALL_MS } from '../config.ts';
 import { ReverseRequestGuard } from './guard.ts';
-import { childExitMessage, deadlineFor, formatExitRecord, formatUptime, isExplained, isMissingSession, isTransportClose, SIGNED_OUT_MESSAGE, spawnFailureMessage, timeoutMessage, type ChildExitRecord } from './child-report.ts';
+import { childExitMessage, deadlineFor, formatExitRecord, formatUptime, isExplained, isMissingSession, isTransportClose, SIGNED_OUT_MESSAGE, spawnFailureMessage, timeoutMessage, watchdogMessage, type ChildExitRecord } from './child-report.ts';
 import { appendStdioLog, enqueueWrite, jsonLineTransform, STDIO_LOG_MAX_BYTES, STDIO_LOG_NAME } from './stdio-log.ts';
+import { EventLoopWatchdog } from './watchdog.ts';
 
 export type ConnectionOptions = {
   binary?: string;
@@ -20,6 +21,8 @@ export type ConnectionOptions = {
   stopGraceMs?: number;
   /** session/cancel must settle the prompt within this long, or the child is killed. Default 5000. */
   cancelAckMs?: number;
+  /** Event-loop stall that kills the child while a reverse request is open. `0` disables. Default 1000. */
+  watchdogMs?: number;
 };
 type AgentChild = ChildProcessByStdio<Writable, Readable, Readable>;
 
@@ -42,9 +45,14 @@ export interface SessionHandlers {
   onSessionExt?(update: any): void;
 }
 
-/** Grok caps hook deadlines at 600 s and fails OPEN on expiry; there are no in-process deadlines. */
+/**
+ * PreToolUse stays at Grok's 600 s cap. The event-loop watchdog is the guard: it SIGKILLs this child
+ * if Pi's loop stalls while a hook, permission, or question is unanswered. A long Grok-side timeout
+ * is what lets an ask-mode dialog wait for a human while the loop is still alive. Grok fails open
+ * when the timeout expires, so the cap has to outlast that dialog and the watchdog.
+ */
 export const CLIENT_HOOKS = {
-  PreToolUse: [{ hookCallbackIds: ['pi-pre'], timeout: GATE_REGISTRATION_MS / 1000 }],
+  PreToolUse: [{ hookCallbackIds: ['pi-pre'], timeout: 600 }],
   PostToolUse: [{ hookCallbackIds: ['pi-post'], timeout: 600 }],
   PostToolUseFailure: [{ hookCallbackIds: ['pi-post-failure'], timeout: 60 }],
   Stop: [{ hookCallbackIds: ['pi-stop'], timeout: 600 }],
@@ -78,6 +86,8 @@ export class GrokModelConnection {
   readonly logPath: string;
   readonly stopGraceMs: number;
   readonly cancelAckMs: number;
+  private readonly watchdogMs: number;
+  private watchdog?: EventLoopWatchdog;
   private readonly logMaxBytes: number;
 
   constructor(options: ConnectionOptions = {}) {
@@ -86,6 +96,13 @@ export class GrokModelConnection {
     this.logMaxBytes = options.logMaxBytes ?? STDIO_LOG_MAX_BYTES;
     this.stopGraceMs = options.stopGraceMs ?? 500;
     this.cancelAckMs = options.cancelAckMs ?? 5000;
+    this.watchdogMs = options.watchdogMs ?? WATCHDOG_STALL_MS;
+    this.ensureWatchdog();
+  }
+
+  private ensureWatchdog() {
+    if (this.watchdog || this.watchdogMs <= 0) return;
+    this.watchdog = new EventLoopWatchdog(this.watchdogMs);
   }
 
   get binary() { return this.options.binary ?? process.env.PI_GROK_BINARY ?? 'grok'; }
@@ -158,8 +175,8 @@ export class GrokModelConnection {
 
   private stderrText(): string { return this.stderrRing.join('\n'); }
 
-  private recordExit(code: number | null, signal: NodeJS.Signals | null) {
-    this.exitHistory.push({ at: new Date().toISOString(), code, signal });
+  private recordExit(code: number | null, signal: NodeJS.Signals | null, watchdog = false) {
+    this.exitHistory.push({ at: new Date().toISOString(), code, signal, ...(watchdog ? { watchdog: true } : {}) });
     if (this.exitHistory.length > 3) this.exitHistory.shift();
   }
 
@@ -202,6 +219,7 @@ export class GrokModelConnection {
     if (this.opening) return this.opening;
     if (this.connection) return;
     this.closed = false;
+    this.ensureWatchdog();
     signal?.throwIfAborted();
     this.opening = (async () => {
       const binary = this.binary;
@@ -215,6 +233,7 @@ export class GrokModelConnection {
         env: { ...process.env, ...this.options.env, GROK_DISABLE_AUTOUPDATER: '1' },
       }) as AgentChild;
       this.child = child;
+      this.watchdog?.setPid(child.pid ?? 0);
       this.startedAt = Date.now();
       let resolveEnd!: (detail: string) => void;
       let endedDetail = false;
@@ -243,11 +262,15 @@ export class GrokModelConnection {
         fail(detail);
       });
       child.once('exit', (code, signal) => {
-        this.recordExit(code, signal);
+        this.watchdog?.setPid(0);
+        const killed = this.watchdog?.takeKill();
+        this.recordExit(code, signal, !!killed);
         // 'exit' can beat the last stderr chunk. A short wait lets that chunk land in the ring.
         setTimeout(() => {
           this.flushStderr();
-          const detail = childExitMessage(binary, code, signal, this.stderrText(), this.ready ? 'running' : 'startup');
+          const detail = killed
+            ? watchdogMessage(killed.stallMs)
+            : childExitMessage(binary, code, signal, this.stderrText(), this.ready ? 'running' : 'startup');
           this.writeLog(`exit: ${detail.split('\n')[0]}`);
           finishEnd(detail);
           fail(detail);
@@ -279,17 +302,24 @@ export class GrokModelConnection {
             this.sessions.get(params.sessionId)?.onUpdate(params);
           })
           .onRequest('session/request_permission', async ({ params }) => {
-            const owned = this.sessions.get(params.sessionId);
-            if (!owned?.onPermission) return { outcome: { outcome: 'cancelled' as const } };
-            return owned.onPermission(params);
+            this.watchdog?.enter();
+            try {
+              const owned = this.sessions.get(params.sessionId);
+              if (!owned?.onPermission) return { outcome: { outcome: 'cancelled' as const } };
+              return await owned.onPermission(params);
+            } finally { this.watchdog?.leave(); }
           })
           .onRequest('_x.ai/ask_user_question', (raw) => raw as any, async ({ params }) => {
-            const id = params.sessionId ?? params.session_id;
-            const owned = id ? this.sessions.get(id) : undefined;
-            if (!owned?.onQuestion) return { outcome: 'cancelled' };
-            return owned.onQuestion(params);
+            this.watchdog?.enter();
+            try {
+              const id = params.sessionId ?? params.session_id;
+              const owned = id ? this.sessions.get(id) : undefined;
+              if (!owned?.onQuestion) return { outcome: 'cancelled' };
+              return await owned.onQuestion(params);
+            } finally { this.watchdog?.leave(); }
           })
           .onRequest('_x.ai/hooks/run', (raw) => raw as any, async ({ params }) => {
+            this.watchdog?.enter();
             try {
               if (!params || typeof params.hookEventName !== 'string' || !params.hookEventName) {
                 return { decision: 'deny', reason: 'Malformed hook payload: missing hookEventName.' };
@@ -305,7 +335,7 @@ export class GrokModelConnection {
               return await owned.onHookRun(params, { dialog: () => {} });
             } catch (error) {
               return { decision: 'deny', reason: `Malformed hook payload: ${error instanceof Error ? error.message : String(error)}` };
-            }
+            } finally { this.watchdog?.leave(); }
           })
           .onNotification('_x.ai/session_notification', (raw) => raw as any, ({ params }) => {
             this.sessions.get(params.sessionId ?? params.session_id)?.onSessionExt?.(params.update);
@@ -427,6 +457,7 @@ export class GrokModelConnection {
 
   /** End only this agent child; a new open starts another and sessions session/load themselves. */
   drop(reason = 'reconnect requested') {
+    this.watchdog?.setPid(0);
     const child = this.child;
     const wasLive = !!this.connection || !!child;
     this.guard?.close(reason);
@@ -450,6 +481,8 @@ export class GrokModelConnection {
 
   async close() {
     this.closed = true;
+    this.watchdog?.stop();
+    this.watchdog = undefined;
     this.drop('Pi connection closed');
     this.sessions.clear();
     this.servers.clear();

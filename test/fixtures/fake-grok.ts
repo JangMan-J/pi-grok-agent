@@ -24,6 +24,7 @@
 //   FAKE_GROK_IGNORE_EOF=1     do not exit when stdin closes
 //   FAKE_GROK_IGNORE_TERM=1    ignore SIGTERM
 //   FAKE_GROK_LOG_BYTES=1      log byte counts for lines over 4 KB instead of the line
+//   FAKE_GROK_TOOL_RAN_MS      after a pre_tool_use emit, write FAKE_GROK_TOOL_RAN if still unanswered (fail-open stand-in)
 import { appendFileSync, unlinkSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:net';
 import { createInterface } from 'node:readline';
@@ -90,7 +91,19 @@ if (args.includes('leader')) {
       if (waiter) { waiters.delete(JSON.stringify(message.id)); waiter(message); return; }
       return;
     }
-    if (message.method === 'test/emit') { send(message.params); return; }
+    if (message.method === 'test/emit') {
+      const ranMs = Number(process.env.FAKE_GROK_TOOL_RAN_MS ?? 0);
+      const marker = process.env.FAKE_GROK_TOOL_RAN;
+      const hook = message.params?.method === '_x.ai/hooks/run' && message.params?.params?.hookEventName === 'pre_tool_use';
+      if (hook && ranMs > 0 && marker && message.params?.id != null) {
+        const timer = setTimeout(() => { try { writeFileSync(marker, 'ran\n'); } catch { /* process is gone */ } }, ranMs);
+        const key = JSON.stringify(message.params.id);
+        const prev = waiters.get(key);
+        waiters.set(key, (response) => { clearTimeout(timer); prev?.(response); });
+      }
+      send(message.params);
+      return;
+    }
     if (message.method === 'test/big') {
       const text = 'y'.repeat(5_000_000);
       send({ jsonrpc: '2.0', method: 'session/update', params: { sessionId: 'fake-session', update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text } } } });
