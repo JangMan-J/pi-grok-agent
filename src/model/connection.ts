@@ -104,7 +104,11 @@ export class GrokModelConnection {
       signal?.addEventListener('abort', abort, { once: true });
       child.once('close', () => signal?.removeEventListener('abort', abort));
       if (signal?.aborted) abort();
-      const stream = ndJsonStream(Writable.toWeb(child.stdin), Readable.toWeb(child.stdout));
+      // Node's toWeb() streams and the ACP SDK's DOM stream types disagree on Uint8Array generics.
+      const stream = ndJsonStream(
+        Writable.toWeb(child.stdin) as unknown as WritableStream<Uint8Array>,
+        Readable.toWeb(child.stdout) as unknown as ReadableStream<Uint8Array>,
+      );
       const writer = stream.writable.getWriter();
       const guardedStream = {
         readable: stream.readable.pipeThrough(new TransformStream<AnyMessage, AnyMessage>({
