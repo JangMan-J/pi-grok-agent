@@ -17,11 +17,11 @@ const CHAT = 'Chat about this';
 const SKIP = 'Skip interview and plan immediately';
 const DONE = 'Done selecting';
 
-export type Answerer = (request: AskUserQuestionRequest) => Promise<AskUserQuestionResponse>;
+export type Answerer = (request: AskUserQuestionRequest, extend?: () => void) => Promise<AskUserQuestionResponse>;
 
 /** Interactive: one Pi dialog per question. Headless: cancelled, which Grok's tool reports to the model as unanswered. */
 export function questionAnswerer(ctx: Pick<ExtensionContext, 'hasUI' | 'ui'>): Answerer {
-  return async (request) => {
+  return async (request, extend) => {
     if (!ctx.hasUI) return { outcome: 'cancelled' };
     const answers: Record<string, string[]> = {};
     const annotations: Record<string, { preview?: string; notes?: string }> = {};
@@ -35,6 +35,7 @@ export function questionAnswerer(ctx: Pick<ExtensionContext, 'hasUI' | 'ui'>): A
       const picked: QuestionOption[] = [];
       for (;;) {
         const menu = multi ? [...labels.filter((l) => !picked.includes(byLabel.get(l)!)), ...(picked.length ? [DONE] : []), ...extras] : [...labels, ...extras];
+        extend?.(); // the connection makes this idempotent across a multi-question interview
         const choice = await ctx.ui.select(picked.length ? `${title} (selected: ${picked.map((p) => p.label).join(', ')})` : title, menu);
         if (choice === undefined) return { outcome: 'cancelled' };
         if (choice === CHAT) return { outcome: 'chat_about_this', partial_answers: partial() };

@@ -3,11 +3,11 @@ import { client, ndJsonStream, type AnyMessage, type ClientConnection, type Init
 import { spawn, type ChildProcessByStdio } from 'node:child_process';
 import { Readable, Writable } from 'node:stream';
 import { join } from 'node:path';
-import { agentDir, WATCHDOG_STALL_MS } from '../config.ts';
-import { ReverseRequestGuard } from './guard.ts';
-import { childExitMessage, deadlineFor, formatExitRecord, formatUptime, isExplained, isMissingSession, isTransportClose, SIGNED_OUT_MESSAGE, spawnFailureMessage, timeoutMessage, watchdogMessage, type ChildExitRecord } from './child-report.ts';
-import { appendStdioLog, enqueueWrite, jsonLineTransform, STDIO_LOG_MAX_BYTES, STDIO_LOG_NAME } from './stdio-log.ts';
-import { EventLoopWatchdog } from './watchdog.ts';
+import { accessSync, constants } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+import { agentDir, resolveGuard } from '../config.ts';
+import { childExitMessage, deadlineFor, formatExitRecord, formatUptime, isExplained, isMissingSession, isTransportClose, SIGNED_OUT_MESSAGE, spawnFailureMessage, timeoutMessage, leashStallMessage, leashDeadlineMessage, leashStartMessage, type ChildExitRecord } from './child-report.ts';
+import { appendStdioLog, jsonLineTransform, STDIO_LOG_MAX_BYTES, STDIO_LOG_NAME } from './stdio-log.ts';
 
 export type ConnectionOptions = {
   binary?: string;
@@ -21,8 +21,15 @@ export type ConnectionOptions = {
   stopGraceMs?: number;
   /** session/cancel must settle the prompt within this long, or the child is killed. Default 5000. */
   cancelAckMs?: number;
-  /** Event-loop stall that kills the child while a reverse request is open. `0` disables. Default 1000. */
-  watchdogMs?: number;
+  /** Executable override; .ts/.js scripts run under Node. `none` explicitly disables the leash. */
+  leashPath?: string;
+  stallMs?: number;
+  requestMs?: number;
+  dialogMs?: number;
+  /** Startup ready notification deadline. Default 10000. */
+  readyMs?: number;
+  /** Test override; 0 suppresses heartbeats. Default 100. */
+  heartbeatMs?: number;
 };
 type AgentChild = ChildProcessByStdio<Writable, Readable, Readable>;
 
@@ -34,22 +41,20 @@ export interface SessionHandlers {
   onUpdate(notification: SessionNotification): void;
   /** Answer one MCP JSON-RPC message from Grok. Return the JSON-RPC `result` or throw for an error. */
   onMcp(message: SdkCall): Promise<unknown>;
-  onPermission?(request: RequestPermissionRequest): Promise<RequestPermissionResponse>;
-  /** Blocking client hook. `gate.dialog()` is retained as a no-op for session handlers. */
+  onPermission?(request: RequestPermissionRequest, extend: () => void): Promise<RequestPermissionResponse>;
+  /** Blocking client hook. `gate.dialog()` extends the leash deadline for a human answer. */
   onHookRun?(payload: any, gate?: { dialog(): void }): Promise<Record<string, unknown>>;
   /** Passive client hook notification (`_x.ai/hooks/event`). */
   onHookEvent?(payload: any): void;
   /** Grok's ask_user_question (`_x.ai/ask_user_question`). Default: cancelled. */
-  onQuestion?(request: any): Promise<Record<string, unknown>>;
+  onQuestion?(request: any, extend: () => void): Promise<Record<string, unknown>>;
   /** Grok's extension session notifications (`_x.ai/session_notification`): turn_completed carries full token usage. */
   onSessionExt?(update: any): void;
 }
 
 /**
- * PreToolUse stays at Grok's 600 s cap. The event-loop watchdog is the guard: it SIGKILLs this child
- * if Pi's loop stalls while a hook, permission, or question is unanswered. A long Grok-side timeout
- * is what lets an ask-mode dialog wait for a human while the loop is still alive. Grok fails open
- * when the timeout expires, so the cap has to outlast that dialog and the watchdog.
+ * Grok's 600 s hook cap outlasts the leash's request and human-dialog deadlines.
+ * The leash denies unanswered requests and kills Grok's group if Pi stops heartbeating.
  */
 export const CLIENT_HOOKS = {
   PreToolUse: [{ hookCallbackIds: ['pi-pre'], timeout: 600 }],
@@ -62,7 +67,6 @@ const UNKNOWN_SESSION = 'No Pi session owns this Grok session; the request was a
 
 export class GrokModelConnection {
   private child?: AgentChild;
-  private guard?: ReverseRequestGuard;
   private stopping = new Set<Promise<void>>();
   private connection?: ClientConnection;
   private initialized?: InitializeResponse;
@@ -81,13 +85,16 @@ export class GrokModelConnection {
   private startedAt?: number;
   private pending = 0;
   private childEnd?: Promise<string>;
-  private writes: { chain: Promise<void> } = { chain: Promise.resolve() };
+  private endChild?: (reason: string) => void;
+  private leashPath?: string;
+  private leashInfo?: { version: string; grokPid: number; stallMs: number; requestMs: number };
+  private readonly leashEvents: { at: string; params: Record<string, unknown> }[] = [];
+  private lateReplies = 0;
   readonly mcpStats = { toolsLent: 0, callsServed: 0, callsFailed: 0 };
   readonly logPath: string;
   readonly stopGraceMs: number;
   readonly cancelAckMs: number;
-  private readonly watchdogMs: number;
-  private watchdog?: EventLoopWatchdog;
+  private readonly guardSettings: { stallMs: number; requestMs: number; dialogMs: number };
   private readonly logMaxBytes: number;
 
   constructor(options: ConnectionOptions = {}) {
@@ -96,16 +103,17 @@ export class GrokModelConnection {
     this.logMaxBytes = options.logMaxBytes ?? STDIO_LOG_MAX_BYTES;
     this.stopGraceMs = options.stopGraceMs ?? 500;
     this.cancelAckMs = options.cancelAckMs ?? 5000;
-    this.watchdogMs = options.watchdogMs ?? WATCHDOG_STALL_MS;
-    this.ensureWatchdog();
+    this.guardSettings = resolveGuard(options, {});
   }
 
-  private ensureWatchdog() {
-    if (this.watchdog || this.watchdogMs <= 0) return;
-    this.watchdog = new EventLoopWatchdog(this.watchdogMs);
-  }
+  get binary() { return this.options.binary ?? this.options.env?.PI_GROK_BINARY ?? process.env.PI_GROK_BINARY ?? 'grok'; }
 
-  get binary() { return this.options.binary ?? process.env.PI_GROK_BINARY ?? 'grok'; }
+  private resolveLeash(): string {
+    const override = this.options.leashPath ?? this.options.env?.PI_GROK_LEASH ?? process.env.PI_GROK_LEASH;
+    if (override !== undefined) return override;
+    const bundled = fileURLToPath(new URL('../../bin/pi-grok-leash', import.meta.url));
+    try { accessSync(bundled, constants.X_OK); return bundled; } catch { return 'pi-grok-leash'; }
+  }
 
   /** Reasons the last connection ended, for status and error text. */
   lastDrop?: string;
@@ -124,6 +132,13 @@ export class GrokModelConnection {
   debugLines(): string[] {
     const uptime = this.startedAt != null && this.child ? formatUptime(Date.now() - this.startedAt) : undefined;
     return [
+      `leash path: ${(this.leashPath ?? this.resolveLeash()) === 'none' ? 'UNGUARDED (PI_GROK_LEASH=none)' : this.leashPath ?? this.resolveLeash()}`,
+      `leash version: ${this.leashInfo?.version ?? '(not ready)'}`,
+      `leash pid: ${this.leashPath === 'none' ? '(unguarded)' : this.pid ?? '(not running)'}`,
+      `grok pid: ${this.leashPath === 'none' ? this.pid ?? '(not running)' : this.child ? this.leashInfo?.grokPid ?? '(not ready)' : '(not running)'}`,
+      `leash deadlines: stall ${this.leashInfo?.stallMs ?? this.guardSettings.stallMs} ms, request ${this.leashInfo?.requestMs ?? this.guardSettings.requestMs} ms, dialog ${this.guardSettings.dialogMs} ms`,
+      `leash events: ${this.leashEvents.length ? this.leashEvents.map(({ at, params }) => `${at} ${JSON.stringify(params)}`).join('; ') : 'none'}`,
+      `leash late replies: ${this.lateReplies}`,
       `child pid: ${this.pid ?? '(not running)'}`,
       `child uptime: ${uptime ?? '(not running)'}`,
       `child exits: ${this.exitHistory.length ? this.exitHistory.map(formatExitRecord).join('; ') : 'none'}`,
@@ -140,7 +155,7 @@ export class GrokModelConnection {
     this.lastDrop = reason;
     this.connection = undefined;
     this.child = undefined;
-    this.guard = undefined;
+    this.endChild = undefined;
     this.initialized = undefined;
     this.ready = false;
     this.startedAt = undefined;
@@ -175,8 +190,8 @@ export class GrokModelConnection {
 
   private stderrText(): string { return this.stderrRing.join('\n'); }
 
-  private recordExit(code: number | null, signal: NodeJS.Signals | null, watchdog = false) {
-    this.exitHistory.push({ at: new Date().toISOString(), code, signal, ...(watchdog ? { watchdog: true } : {}) });
+  private recordExit(code: number | null, signal: NodeJS.Signals | null) {
+    this.exitHistory.push({ at: new Date().toISOString(), code, signal });
     if (this.exitHistory.length > 3) this.exitHistory.shift();
   }
 
@@ -219,31 +234,50 @@ export class GrokModelConnection {
     if (this.opening) return this.opening;
     if (this.connection) return;
     this.closed = false;
-    this.ensureWatchdog();
     signal?.throwIfAborted();
     this.opening = (async () => {
       const binary = this.binary;
       this.stderrRing.length = 0;
       this.stderrPartial = '';
-      this.writes = { chain: Promise.resolve() };
-      const child = spawn(binary, ['--permission-mode', 'default', 'agent', '--no-leader', 'stdio'], {
+      const leash = this.leashPath = this.resolveLeash();
+      this.leashInfo = undefined;
+      const guarded = leash !== 'none';
+      const grokArgs = ['--permission-mode', 'default', 'agent', '--no-leader', 'stdio'];
+      const args = guarded ? ['--parent', String(process.pid), '--stall-ms', String(this.guardSettings.stallMs), '--request-ms', String(this.guardSettings.requestMs), '--', binary, ...grokArgs] : grokArgs;
+      const script = guarded && /\.(?:ts|js)$/.test(leash);
+      const executable = guarded ? (script ? process.execPath : leash) : binary;
+      const child = spawn(executable, script ? [leash, ...args] : args, {
         stdio: ['pipe', 'pipe', 'pipe'],
         // Grok Build 1.0.46 user guide, 14-headless-mode.md: SDKs inject this for non-leader agents they spawn.
-        // Not detached. Node has no prctl PDEATHSIG; a SIGKILL of Pi still closes these pipes.
+        // Non-detached leash owns Grok's separate process group and parent-death protection.
         env: { ...process.env, ...this.options.env, GROK_DISABLE_AUTOUPDATER: '1' },
       }) as AgentChild;
       this.child = child;
-      this.watchdog?.setPid(child.pid ?? 0);
       this.startedAt = Date.now();
+      const writeLine = (message: unknown) => {
+        if (child.stdin.destroyed || child.stdin.writableEnded) return;
+        try { child.stdin.write(`${JSON.stringify(message)}\n`, () => {}); } catch { /* exit owns transport errors */ }
+      };
+      // ndJsonStream writes one complete line per chunk. Direct writes cannot split ACP frames,
+      // and avoid waiting behind the SDK writer's backpressure promise.
+      const heartbeat = guarded && (this.options.heartbeatMs ?? 100) > 0
+        ? setInterval(() => writeLine({ jsonrpc: '2.0', method: 'pi/heartbeat' }), this.options.heartbeatMs ?? 100) : undefined;
+      heartbeat?.unref();
+      const stopHeartbeat = () => { if (heartbeat) clearInterval(heartbeat); };
+      child.once('exit', stopHeartbeat);
+      child.once('error', stopHeartbeat);
       let resolveEnd!: (detail: string) => void;
       let endedDetail = false;
       const childEnd = new Promise<string>((resolve) => { resolveEnd = resolve; });
       this.childEnd = childEnd;
       const finishEnd = (detail: string) => { if (endedDetail) return; endedDetail = true; resolveEnd(detail); };
-      const guard = new ReverseRequestGuard((message) => {
-        void enqueueWrite(child.stdin, `${JSON.stringify(message)}\n`, this.writes).catch(() => {});
-      });
-      this.guard = guard;
+      this.endChild = finishEnd;
+      let leashFailure: string | undefined;
+      let grokExit: { code: number | null; signal: NodeJS.Signals | null } | undefined;
+      let sawReady = !guarded;
+      let resolveReady!: () => void;
+      const leashReady = new Promise<void>((resolve) => { resolveReady = resolve; });
+      if (!guarded) resolveReady();
       let rejectEnded!: (error: Error) => void;
       const ended = new Promise<never>((_, reject) => { rejectEnded = reject; });
       void ended.catch(() => {});
@@ -256,87 +290,101 @@ export class GrokModelConnection {
       child.stderr.on('error', () => {});
       child.stdout.on('error', () => {});
       child.once('error', (error) => {
-        const detail = spawnFailureMessage(binary, error, this.stderrText());
+        const detail = guarded ? leashStartMessage(leash, error.message, this.stderrText()) : spawnFailureMessage(binary, error, this.stderrText());
         this.writeLog(`spawn: ${detail}`);
         finishEnd(detail);
         fail(detail);
       });
       child.once('exit', (code, signal) => {
-        this.watchdog?.setPid(0);
-        const killed = this.watchdog?.takeKill();
-        this.recordExit(code, signal, !!killed);
-        // 'exit' can beat the last stderr chunk. A short wait lets that chunk land in the ring.
+        // 'exit' can beat the last stderr chunk and child-exit frame. Let them land first.
         setTimeout(() => {
+          const exit = grokExit ?? { code, signal };
+          this.recordExit(exit.code, exit.signal);
           this.flushStderr();
-          const detail = killed
-            ? watchdogMessage(killed.stallMs)
-            : childExitMessage(binary, code, signal, this.stderrText(), this.ready ? 'running' : 'startup');
+          const detail = leashFailure ?? (!sawReady
+            ? leashStartMessage(leash, `exited before ready (code ${code}, signal ${signal})`, this.stderrText())
+            : childExitMessage(binary, exit.code, exit.signal, this.stderrText(), this.ready ? 'running' : 'startup'));
           this.writeLog(`exit: ${detail.split('\n')[0]}`);
           finishEnd(detail);
           fail(detail);
         }, 20);
       });
-      child.stdin.on('error', (error) => fail(error.message));
+      child.stdin.on('error', () => {}); // exit supplies the cause and stderr, rather than an incidental EPIPE
       const abort = () => fail('Grok connection cancelled.');
       signal?.addEventListener('abort', abort, { once: true });
       child.once('close', () => signal?.removeEventListener('abort', abort));
       if (signal?.aborted) abort();
-      const filtered = child.stdout.pipe(jsonLineTransform((line) => this.writeLog(`framing: skipped non-JSON stdout: ${line}`)));
+      const filtered = child.stdout.pipe(jsonLineTransform(
+        (line) => this.writeLog(`framing: skipped non-JSON stdout: ${line}`),
+        (line) => {
+          if (!guarded) return;
+          let message: any;
+          try { message = JSON.parse(line); } catch { /* rejected below */ }
+          const p = message?.params;
+          if (message?.jsonrpc !== '2.0' || message?.method !== 'pi/leash' || 'id' in message || p?.event !== 'ready' ||
+            typeof p.version !== 'string' || !Number.isInteger(p.grokPid) || !(p.grokPid > 0) ||
+            !Number.isFinite(p.stallMs) || !(p.stallMs > 0) || !Number.isFinite(p.requestMs) || !(p.requestMs > 0)) {
+            fail(leashStartMessage(leash, 'first stdout line was not a valid ready notification', this.stderrText()));
+            return;
+          }
+          sawReady = true;
+          this.leashInfo = p;
+          resolveReady();
+        },
+      ));
       // Node's toWeb() streams and the ACP SDK's DOM stream types disagree on Uint8Array generics.
       const stream = ndJsonStream(
         Writable.toWeb(child.stdin) as unknown as WritableStream<Uint8Array>,
         Readable.toWeb(filtered) as unknown as ReadableStream<Uint8Array>,
       );
-      const writer = stream.writable.getWriter();
-      const guardedStream = {
+      const intercepted = {
         readable: stream.readable.pipeThrough(new TransformStream<AnyMessage, AnyMessage>({
-          transform(message, controller) { guard.watch(message); controller.enqueue(message); },
+          transform: (message, controller) => {
+            if (!sawReady) return;
+            if (guarded && 'method' in message && message.method === 'pi/leash') {
+              const p = message.params as Record<string, any>;
+              if (!p || typeof p.event !== 'string') return;
+              this.leashEvents.push({ at: new Date().toISOString(), params: p });
+              if (this.leashEvents.length > 5) this.leashEvents.shift();
+              if (p.event === 'late-reply') this.lateReplies++;
+              if (p.event === 'child-exit') grokExit = { code: p.code, signal: p.signal };
+              if (p.event === 'stall' || p.event === 'deadline') {
+                leashFailure = p.event === 'stall' ? leashStallMessage(p.ms) : leashDeadlineMessage(p.method, p.id, p.ms);
+                finishEnd(leashFailure);
+                fail(leashFailure);
+              }
+              return;
+            }
+            controller.enqueue(message);
+          },
         })),
-        writable: new WritableStream<AnyMessage>({
-          write(message) { if (guard.settle(message) === 'forward') return writer.write(message); },
-        }),
+        writable: stream.writable,
       };
+      // SDK 1.5 exposes the raw id as ctx.requestId. Use that instead of identity/FIFO
+      // interception, preserving the SDK's permission schema validation and response writer.
+      const dialogExtension = (id: unknown) => {
+        let extended = false;
+        return () => {
+          if (!guarded || extended) return;
+          extended = true;
+          writeLine({ jsonrpc: '2.0', method: 'pi/extend', params: { id, ms: this.guardSettings.dialogMs } });
+        };
+      };
+      let readyTimer: ReturnType<typeof setTimeout> | undefined;
       try {
         this.connection = client({ name: 'pi-grok-model' })
           .onNotification('session/update', ({ params }) => {
             this.sessions.get(params.sessionId)?.onUpdate(params);
           })
-          .onRequest('session/request_permission', async ({ params }) => {
-            this.watchdog?.enter();
-            try {
-              const owned = this.sessions.get(params.sessionId);
-              if (!owned?.onPermission) return { outcome: { outcome: 'cancelled' as const } };
-              return await owned.onPermission(params);
-            } finally { this.watchdog?.leave(); }
+          .onRequest('session/request_permission', async ({ params, requestId }) => {
+            const owned = this.sessions.get(params.sessionId);
+            return owned?.onPermission ? owned.onPermission(params, dialogExtension(requestId)) : { outcome: { outcome: 'cancelled' as const } };
           })
-          .onRequest('_x.ai/ask_user_question', (raw) => raw as any, async ({ params }) => {
-            this.watchdog?.enter();
-            try {
-              const id = params.sessionId ?? params.session_id;
-              const owned = id ? this.sessions.get(id) : undefined;
-              if (!owned?.onQuestion) return { outcome: 'cancelled' };
-              return await owned.onQuestion(params);
-            } finally { this.watchdog?.leave(); }
+          .onRequest('_x.ai/ask_user_question', (raw) => raw as any, async ({ params, requestId }) => {
+            const owned = this.sessions.get(params?.sessionId ?? params?.session_id);
+            return owned?.onQuestion ? owned.onQuestion(params, dialogExtension(requestId)) : { outcome: 'cancelled' };
           })
-          .onRequest('_x.ai/hooks/run', (raw) => raw as any, async ({ params }) => {
-            this.watchdog?.enter();
-            try {
-              if (!params || typeof params.hookEventName !== 'string' || !params.hookEventName) {
-                return { decision: 'deny', reason: 'Malformed hook payload: missing hookEventName.' };
-              }
-              const id = params.sessionId ?? params.session_id;
-              const owned = id ? this.sessions.get(id) : undefined;
-              const event = String(params.hookEventName ?? '');
-              if (!owned?.onHookRun) {
-                // No Pi session owns this Grok session (/new, session_tree, or a late event). Answer now.
-                if (event === 'pre_tool_use') return { decision: 'deny', reason: `Pi detached from this Grok session; tool use is denied until a Pi session owns it again. ${UNKNOWN_SESSION}` };
-                return { decision: 'continue' };
-              }
-              return await owned.onHookRun(params, { dialog: () => {} });
-            } catch (error) {
-              return { decision: 'deny', reason: `Malformed hook payload: ${error instanceof Error ? error.message : String(error)}` };
-            } finally { this.watchdog?.leave(); }
-          })
+          .onRequest('_x.ai/hooks/run', (raw) => raw as any, ({ params, requestId }) => this.answerHook(params, dialogExtension(requestId)))
           .onNotification('_x.ai/session_notification', (raw) => raw as any, ({ params }) => {
             this.sessions.get(params.sessionId ?? params.session_id)?.onSessionExt?.(params.update);
           })
@@ -358,7 +406,11 @@ export class GrokModelConnection {
               return { jsonrpc: '2.0', id: message.id, error: { code: -32603, message: error instanceof Error ? error.message : String(error) } };
             }
           })
-          .connect(guardedStream);
+          .connect(intercepted);
+        await Promise.race([ended, leashReady, new Promise<never>((_, reject) => {
+          readyTimer = setTimeout(() => { this.flushStderr(); reject(new Error(leashStartMessage(leash, `no ready notification within ${this.options.readyMs ?? 10_000} ms`, this.stderrText()))); }, this.options.readyMs ?? 10_000);
+        })]);
+        clearTimeout(readyTimer);
         const agent = this.connection.agent as unknown as { request: (method: string, params?: unknown) => Promise<unknown> };
         this.installRequestGuard(agent);
         this.initialized = await Promise.race([ended, agent.request('initialize', {
@@ -390,9 +442,26 @@ export class GrokModelConnection {
         if (this.child === child) this.drop(err.message);
         if (isExplained(err.message)) throw err;
         throw new Error(`Grok stdio child ${binary}: ${err.message}`, { cause: error });
-      }
+      } finally { clearTimeout(readyTimer); }
     })().finally(() => { this.opening = undefined; });
     return this.opening;
+  }
+
+  private async answerHook(params: any, extend: () => void): Promise<Record<string, unknown>> {
+    const id = params?.sessionId ?? params?.session_id;
+    const owned = id ? this.sessions.get(id) : undefined;
+    try {
+      if (!params || typeof params.hookEventName !== 'string' || !params.hookEventName) {
+        return { decision: 'deny', reason: 'Malformed hook payload: missing hookEventName.' };
+      }
+      if (!owned?.onHookRun) {
+        if (params.hookEventName === 'pre_tool_use') return { decision: 'deny', reason: `Pi detached from this Grok session; tool use is denied until a Pi session owns it again. ${UNKNOWN_SESSION}` };
+        return { decision: 'continue' };
+      }
+      return await owned.onHookRun(params, { dialog: extend });
+    } catch (error) {
+      return { decision: 'deny', reason: `Malformed hook payload: ${error instanceof Error ? error.message : String(error)}` };
+    }
   }
 
   get agent() {
@@ -457,23 +526,19 @@ export class GrokModelConnection {
 
   /** End only this agent child; a new open starts another and sessions session/load themselves. */
   drop(reason = 'reconnect requested') {
-    this.watchdog?.setPid(0);
     const child = this.child;
     const wasLive = !!this.connection || !!child;
-    this.guard?.close(reason);
-    const writes = this.writes;
+    this.endChild?.(reason);
     this.markDropped(reason);
     if (wasLive) for (const listener of this.dropListeners) listener(reason);
     if (!child) return;
-    // Fail-closed answers are queued on `writes`. End stdin only after they flush, then SIGTERM, then SIGKILL.
-    // Node cannot set PDEATHSIG; a SIGKILL of Pi only closes these pipes.
+    // EOF asks the leash to kill and reap Grok's group. Escalation is only a fallback for a stuck leash.
     const stopped = new Promise<void>((resolve) => {
       if (child.exitCode !== null || child.signalCode !== null) { resolve(); return; }
       const term = setTimeout(() => { if (child.exitCode === null && child.signalCode === null) child.kill('SIGTERM'); }, this.stopGraceMs);
       const kill = setTimeout(() => { if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL'); }, this.stopGraceMs * 2);
       child.once('close', () => { clearTimeout(term); clearTimeout(kill); resolve(); });
-      const endStdin = () => { if (!child.stdin.destroyed && !child.stdin.writableEnded) child.stdin.end(); };
-      void writes.chain.then(endStdin, endStdin);
+      if (!child.stdin.destroyed && !child.stdin.writableEnded) child.stdin.end();
     });
     this.stopping.add(stopped);
     void stopped.finally(() => this.stopping.delete(stopped));
@@ -481,8 +546,6 @@ export class GrokModelConnection {
 
   async close() {
     this.closed = true;
-    this.watchdog?.stop();
-    this.watchdog = undefined;
     this.drop('Pi connection closed');
     this.sessions.clear();
     this.servers.clear();

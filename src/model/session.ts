@@ -72,9 +72,9 @@ export class GrokModelSession {
   readonly piSessionId: string;
   readonly cwd: string;
   /** Grok's native permission prompts (file edits, shell) go here; default denies. */
-  permission: (request: RequestPermissionRequest) => Promise<RequestPermissionResponse> = async () => ({ outcome: { outcome: 'cancelled' } });
+  permission: (request: RequestPermissionRequest, extend?: () => void) => Promise<RequestPermissionResponse> = async () => ({ outcome: { outcome: 'cancelled' } });
   /** Grok's ask_user_question; default cancelled (the model is told the user did not answer). */
-  ask: (request: any) => Promise<Record<string, unknown>> = async () => ({ outcome: 'cancelled' });
+  ask: (request: any, extend?: () => void) => Promise<Record<string, unknown>> = async () => ({ outcome: 'cancelled' });
   /** Pi tool names present in the Pi session; the pre_tool_use gate mirrors them onto Grok's harness. */
   piToolNames: string[] = [];
   /** Runtime source/namespace metadata for Pi tools, when Pi exposes it before transcript serialization. */
@@ -167,7 +167,7 @@ export class GrokModelSession {
     const attached = await this.connection.attachSession({
       sessionId: this.grokSessionId, cwd: this.cwd, serverId: this.serverId, serverName: PI_MCP_SERVER_NAME, rules,
       offerPiTools: this.tools.length > 0, grokMode: this.grokMode,
-      handlers: { onUpdate: (n) => this.onUpdate(n), onMcp: (m) => this.onMcp(m), onPermission: (r) => this.permission(r), onHookRun: (p, gate) => this.onHookRun(p, gate), onHookEvent: (p) => { void this.onHookRun(p); }, onQuestion: (q) => this.ask(q), onSessionExt: (u) => this.onSessionExt(u) },
+      handlers: { onUpdate: (n) => this.onUpdate(n), onMcp: (m) => this.onMcp(m), onPermission: (r, extend) => this.permission(r, extend), onHookRun: (p, gate) => this.onHookRun(p, gate), onHookEvent: (p) => { void this.onHookRun(p); }, onQuestion: (q, extend) => this.ask(q, extend), onSessionExt: (u) => this.onSessionExt(u) },
     });
     const { sessionId, response } = attached;
     if (attached.replacedSessionId) {
@@ -423,7 +423,7 @@ export class GrokModelSession {
           const kind = classify(tool, stamp);
           const needsDialog = this.permissionMode === 'ask' && kind !== 'read' && kind !== 'other';
           if (verdict.allow && needsDialog && this.askDialog) {
-            gate?.dialog(); // a human is deciding: the gateway waits the dialog window, not the policy window
+            gate?.dialog(); // a human is deciding: extend the leash's request deadline
             const ok = await this.askDialog(tool, payload.toolInput);
             if (!ok) verdict = { allow: false, reason: `The user declined ${tool}.` };
           }

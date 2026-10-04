@@ -4,14 +4,15 @@ import type { RequestPermissionRequest, RequestPermissionResponse } from '@agent
 import type { ExtensionContext } from '@earendil-works/pi-coding-agent';
 import type { HeadlessPermissionPolicy } from '../config.ts';
 
-type Answer = (request: RequestPermissionRequest) => Promise<RequestPermissionResponse>;
+type Answer = (request: RequestPermissionRequest, extend?: () => void) => Promise<RequestPermissionResponse>;
 
 /** Interactive: Grok's permission prompt as a Pi selection dialog. Dismissal cancels; Grok treats that as a rejection. */
 export function permissionDialog(ctx: Pick<ExtensionContext, 'hasUI' | 'ui'>): Answer {
-  return async (request) => {
+  return async (request, extend) => {
     if (!ctx.hasUI) return { outcome: { outcome: 'cancelled' } };
     const labels = request.options.map((option, i) => `${i + 1}. ${option.name} (${option.kind})`);
     const details = JSON.stringify(request.toolCall.rawInput ?? {}, null, 2).slice(0, 4000);
+    extend?.();
     const selected = await ctx.ui.select(`Grok: ${request.toolCall.title}\n${details}`, labels);
     const index = selected === undefined ? -1 : labels.indexOf(selected);
     if (index < 0) return { outcome: { outcome: 'cancelled' } };
@@ -44,5 +45,5 @@ export function headlessPermission(policy: HeadlessPermissionPolicy): Answer {
 export function permissionAnswer(hasUI: boolean, dialog: Answer, policy: HeadlessPermissionPolicy, mode: () => 'yolo' | 'auto' | 'ask' | 'readonly' = () => 'auto'): Answer {
   const base = hasUI ? dialog : headlessPermission(policy);
   const allow = headlessPermission('allow');
-  return (request) => (mode() === 'yolo' ? allow(request) : base(request));
+  return (request, extend) => (mode() === 'yolo' ? allow(request) : base(request, extend));
 }
