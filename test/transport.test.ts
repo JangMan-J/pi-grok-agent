@@ -19,7 +19,7 @@ function scratch() {
   return { home, log: join(home, 'received.jsonl'), cleanup: () => rmSync(home, { recursive: true, force: true }) };
 }
 function connect(s: ReturnType<typeof scratch>, env: NodeJS.ProcessEnv = {}) {
-  return new GrokModelConnection({ binary: FAKE_GROK, env: { FAKE_GROK_LOG: s.log, ...env } });
+  return new GrokModelConnection({ binary: FAKE_GROK, env: { FAKE_GROK_LOG: s.log, ...env }, logPath: join(s.home, 'grok-stdio.log'), stopGraceMs: 40 });
 }
 const received = (s: ReturnType<typeof scratch>, id: string) => (existsSync(s.log) ? readFileSync(s.log, 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l)).filter((m) => m.id === id) : []);
 const handlers: SessionHandlers = { onUpdate() {}, async onMcp() { return {}; } };
@@ -183,24 +183,32 @@ test('pending gates have no timer answer, close fails closed, late handlers cann
 
 test('missing binary and pre-initialize exit report the binary; abort ends the child', async (t) => {
   const s = scratch(); t.after(s.cleanup);
-  const missing = new GrokModelConnection({ binary: join(s.home, 'missing-grok') }); t.after(() => missing.close());
+  const missing = new GrokModelConnection({ binary: join(s.home, 'missing-grok'), logPath: join(s.home, 'missing.log') }); t.after(() => missing.close());
   await assert.rejects(missing.open(), /missing-grok/);
   assert.equal(missing.isOpen, false);
   const exitsBinary = join(s.home, 'exits-grok');
   writeFileSync(exitsBinary, '#!/usr/bin/env node\nprocess.exit(0);\n', { mode: 0o755 });
-  const exits = new GrokModelConnection({ binary: exitsBinary }); t.after(() => exits.close());
-  await assert.rejects(exits.open(), /exits-grok.*(exited|EPIPE|closed)/);
-  const connection = connect(s); t.after(() => connection.close());
+  const exits = new GrokModelConnection({ binary: exitsBinary, logPath: join(s.home, 'exits.log'), stopGraceMs: 40 }); t.after(() => exits.close());
+  await assert.rejects(exits.open(), /exits-grok/);
+  const connection = connect(s, { FAKE_GROK_DELAY_MS: '400' }); t.after(() => connection.close());
   const abort = new AbortController();
-  await connection.open(abort.signal);
+  const opening = connection.open(abort.signal);
+  await sleep(30);
   abort.abort();
+  await assert.rejects(opening, /cancelled/);
   assert.equal(connection.isOpen, false);
-  assert.match(connection.lastDrop!, /cancelled/);
+  assert.match(connection.lastDrop ?? '', /cancelled/);
+  // Escape after the child is ready cancels the turn. It does not drop the child from this signal.
+  const stayed = connect(s); t.after(() => stayed.close());
+  const later = new AbortController();
+  await stayed.open(later.signal);
+  later.abort();
+  assert.equal(stayed.isOpen, true);
 });
 
 test('sdk_call routes one MCP message through the session handler', async (t) => {
   const s = scratch(); t.after(s.cleanup);
-  const connection = new GrokModelConnection({ binary: FAKE_GROK, env: { FAKE_GROK_LOG: s.log } });
+  const connection = new GrokModelConnection({ binary: FAKE_GROK, env: { FAKE_GROK_LOG: s.log }, logPath: join(s.home, 'grok-stdio.log'), stopGraceMs: 40 });
   t.after(() => connection.close());
   const calls: string[] = [];
   await connection.open();

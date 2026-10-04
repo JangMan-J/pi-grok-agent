@@ -10,6 +10,7 @@ import { readConfig, writeConfig, type PiPermissionMode } from './config.ts';
 import { grokLogin } from './login.ts';
 import { permissionAnswer, permissionDialog } from './model/permissions.ts';
 import { questionAnswerer } from './model/questions.ts';
+import { storedSessionAction } from './model/child-report.ts';
 import { GrokModelConnection } from './model/connection.ts';
 import { GrokModelSession, type GrokToolRecord } from './model/session.ts';
 import { createGrokStream, GROK_API, MODEL_IDS } from './model/provider.ts';
@@ -112,7 +113,10 @@ export default async function grokModel(pi: ExtensionAPI) {
       if (entry.type === 'custom' && entry.customType === ENTRY && (entry.data as SavedModelSession)?.owner === owner) saved = entry.data as SavedModelSession;
     }
     current = configure(new GrokModelSession(connection, owner, ctx.cwd, saved?.serverId), ctx);
-    if (saved && saved.cwd === ctx.cwd) current.grokSessionId = saved.grokSessionId;
+    // 17-sessions.md stores each session under its cwd. A different cwd gets a new session.
+    const stored = storedSessionAction(saved, ctx.cwd);
+    if (stored.grokSessionId) current.grokSessionId = stored.grokSessionId;
+    if (stored.notice) current.notice = stored.notice;
   }
 
   /** Permission answers, hook settings, and the structured tool record sink. */
@@ -323,6 +327,7 @@ export default async function grokModel(pi: ExtensionAPI) {
             const withheldPiTools = sortedNames(session.piToolNames.filter((toolName) => blockedPiToolNames.has(toolName)));
             show('Grok debug', [
               `stdio child: ${connection.binary} (${connection.isOpen ? 'connected' : 'not connected'}${connection.lastDrop ? `, last drop: ${connection.lastDrop}` : ''})`,
+              ...connection.debugLines(),
               `grok session: ${session.grokSessionId ?? '(none yet; first message creates it)'}`,
               `mode: ${session.mode}${session.promptActive ? ' (turn running)' : ''}; pi perms: ${session.permissionMode}; grok mode: ${session.grokMode}`,
               `grok context: ${session.lastContextTokens != null ? `${session.lastContextTokens.toLocaleString()} / ${contextWindowFor(session.grokModel).toLocaleString()}` : 'unknown'}`,
