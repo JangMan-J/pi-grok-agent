@@ -23,14 +23,13 @@ Scripts are in `package.json`. Run `npm install` once before any check. The `pi`
 | --- | --- |
 | `src/model.ts` | Extension entry: provider registration, renderers, `/grok` command, media display, steer wiring |
 | `src/model/provider.ts` | Pi transcript to ACP prompt. System prompt goes as `_meta.rules`. Only the new tail is sent. Model IDs. |
-| `src/model/connection.ts` | One stdio agent child per Pi process, `session/new` or `session/load`, `cached_token` auth |
+| `src/model/connection.ts` | One stdio leash per Pi process, ready handshake, heartbeat and dialog extensions, leash events, `session/new` or `session/load`, `cached_token` auth |
 | `src/model/session.ts` | ACP updates to Pi events, client hooks, media copy, lent-tool parking. `startPrompt` owns the prompt lifetime for normal turns and `/grok` commands: busy state, cancel, late-completion suppression |
 | `src/model/hooks.ts` | `capabilityGate`, `postEditContext`, `stopGate` |
 | `src/model/permissions.ts`, `questions.ts` | Grok permission prompts and `ask_user_question` as Pi dialogs |
 | `src/model/steer.ts` | Mid-turn Enter to `_x.ai/interject` |
-| `src/config.ts` | `~/.pi/agent/grok-ws.json`, environment overrides, legacy guard validation (no timers applied) |
+| `src/config.ts` | `~/.pi/agent/grok-ws.json`, environment overrides, leash stall/request/dialog deadline validation |
 | `src/login.ts` | `/grok login`: runs `grok login --device-auth`, parses the URL and code. Grok stores the credential; Pi stores nothing. A signed-out Grok offers no `cached_token` method, and `connection.ts` then drops the connection with a pointer to `/grok login` |
-| `src/model/guard.ts` | One guarded lifetime per reverse request, fail-closed answers on orderly close and late-answer suppression; no ack tiers |
 
 
 Invariants:
@@ -38,7 +37,7 @@ Invariants:
 - Grok native tool calls stay on Grok. They become `grok-tools` batch rows or `grok-tool` entries, never thinking text or Pi tool calls (`test/model.test.ts`). Rows keep call order (`test/extension.test.ts`).
 - Custom entries and `grok-media` messages are display only. The provider never sends them to Grok.
 - Grok's model context keeps full tool results. Pi's copies are shortened: 8000 characters in a `grok-tool` entry, 600 in the expanded renderer. Native tool activity stays out of the thinking stream.
-- The stdio child starts Grok in default permission mode. Never pass `--always-approve`. A hung-but-alive Pi is unguarded; Grok fails open at its hook timeout.
+- The stdio child starts Grok in default permission mode. Never pass `--always-approve`. The leash kills Grok's process group when Pi stops heartbeating and denies unanswered tracked requests before Grok's hook timeout; `PI_GROK_LEASH=none` explicitly opts out.
 - `zod` stays in `dependencies` although nothing imports it: `@agentclientprotocol/sdk` lists it as a peer, Pi installs with `--legacy-peer-deps`, and the extension failed with `Cannot find module 'zod/v4'` without it (`docs/launch-verification.md`, G2).
 
 ## Documentation claims

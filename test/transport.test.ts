@@ -8,6 +8,7 @@ import { GrokModelConnection, type SessionHandlers } from '../src/model/connecti
 import { GrokModelSession } from '../src/model/session.ts';
 
 const FAKE_GROK = join(import.meta.dirname, 'fixtures', 'fake-grok.ts');
+const FAKE_LEASH = join(import.meta.dirname, 'fixtures', 'fake-leash.ts');
 chmodSync(FAKE_GROK, 0o755);
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 async function until(check: () => boolean, what: string, timeoutMs = 5000) {
@@ -19,7 +20,7 @@ function scratch() {
   return { home, log: join(home, 'received.jsonl'), cleanup: () => rmSync(home, { recursive: true, force: true }) };
 }
 function connect(s: ReturnType<typeof scratch>, env: NodeJS.ProcessEnv = {}) {
-  return new GrokModelConnection({ binary: FAKE_GROK, env: { FAKE_GROK_LOG: s.log, ...env }, logPath: join(s.home, 'grok-stdio.log'), stopGraceMs: 40 });
+  return new GrokModelConnection({ leashPath: FAKE_LEASH, binary: FAKE_GROK, env: { FAKE_GROK_LOG: s.log, ...env }, logPath: join(s.home, 'grok-stdio.log'), stopGraceMs: 40 });
 }
 const received = (s: ReturnType<typeof scratch>, id: string) => (existsSync(s.log) ? readFileSync(s.log, 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l)).filter((m) => m.id === id) : []);
 const handlers: SessionHandlers = { onUpdate() {}, async onMcp() { return {}; } };
@@ -136,7 +137,7 @@ test('failed session attach removes only its own early routing registrations', a
   assert.equal(routes.sessions.get('loaded'), replacement);
 });
 
-test('one direct agent child serves multiple sessions and drop starts a new child', async (t) => {
+test('one leashed agent child serves multiple sessions and drop starts a new child', async (t) => {
   const s = scratch(); t.after(s.cleanup);
   const connection = connect(s, { GROK_DISABLE_AUTOUPDATER: '0' }); t.after(() => connection.close());
   await Promise.all([connection.open(), connection.open()]);
@@ -153,7 +154,7 @@ test('one direct agent child serves multiple sessions and drop starts a new chil
   assert.deepEqual(received(s, 'spawn').map((m) => m.autoupdate), ['1', '1']);
 });
 
-test('pending gates have no timer answer, close fails closed, late handlers cannot answer twice', async (t) => {
+test('close kills the leashed child without TS synthetic answers; late handlers cannot reach Grok', async (t) => {
   const s = scratch(); t.after(s.cleanup);
   const connection = connect(s); t.after(() => connection.close());
   let hookArrived = false; let permissionArrived = false;
@@ -172,23 +173,23 @@ test('pending gates have no timer answer, close fails closed, late handlers cann
   assert.equal(received(s, 'pending-hook').length, 0);
   assert.equal(received(s, 'pending-perm').length, 0);
   await connection.close();
-  assert.deepEqual(received(s, 'pending-hook').map((m) => m.result), [{ decision: 'deny', reason: 'Denied because the Pi session is gone: Pi connection closed.' }]);
-  assert.deepEqual(received(s, 'pending-perm').map((m) => m.result), [{ outcome: { outcome: 'selected', optionId: 'no' } }]);
+  assert.equal(received(s, 'pending-hook').length, 0);
+  assert.equal(received(s, 'pending-perm').length, 0);
   resolveHook({ decision: 'continue' });
   resolvePermission({ outcome: { outcome: 'selected', optionId: 'yes' } });
   await sleep(100);
-  assert.equal(received(s, 'pending-hook').length, 1);
-  assert.equal(received(s, 'pending-perm').length, 1);
+  assert.equal(received(s, 'pending-hook').length, 0);
+  assert.equal(received(s, 'pending-perm').length, 0);
 });
 
 test('missing binary and pre-initialize exit report the binary; abort ends the child', async (t) => {
   const s = scratch(); t.after(s.cleanup);
-  const missing = new GrokModelConnection({ binary: join(s.home, 'missing-grok'), logPath: join(s.home, 'missing.log') }); t.after(() => missing.close());
+  const missing = new GrokModelConnection({ leashPath: FAKE_LEASH, binary: join(s.home, 'missing-grok'), logPath: join(s.home, 'missing.log') }); t.after(() => missing.close());
   await assert.rejects(missing.open(), /missing-grok/);
   assert.equal(missing.isOpen, false);
   const exitsBinary = join(s.home, 'exits-grok');
   writeFileSync(exitsBinary, '#!/usr/bin/env node\nprocess.exit(0);\n', { mode: 0o755 });
-  const exits = new GrokModelConnection({ binary: exitsBinary, logPath: join(s.home, 'exits.log'), stopGraceMs: 40 }); t.after(() => exits.close());
+  const exits = new GrokModelConnection({ leashPath: FAKE_LEASH, binary: exitsBinary, logPath: join(s.home, 'exits.log'), stopGraceMs: 40 }); t.after(() => exits.close());
   await assert.rejects(exits.open(), /exits-grok/);
   const connection = connect(s, { FAKE_GROK_DELAY_MS: '400' }); t.after(() => connection.close());
   const abort = new AbortController();
@@ -208,7 +209,7 @@ test('missing binary and pre-initialize exit report the binary; abort ends the c
 
 test('sdk_call routes one MCP message through the session handler', async (t) => {
   const s = scratch(); t.after(s.cleanup);
-  const connection = new GrokModelConnection({ binary: FAKE_GROK, env: { FAKE_GROK_LOG: s.log }, logPath: join(s.home, 'grok-stdio.log'), stopGraceMs: 40 });
+  const connection = new GrokModelConnection({ leashPath: FAKE_LEASH, binary: FAKE_GROK, env: { FAKE_GROK_LOG: s.log }, logPath: join(s.home, 'grok-stdio.log'), stopGraceMs: 40 });
   t.after(() => connection.close());
   const calls: string[] = [];
   await connection.open();

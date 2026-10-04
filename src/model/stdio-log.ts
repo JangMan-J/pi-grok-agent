@@ -30,9 +30,11 @@ function takeJson(line: string): { json?: string; skip?: string } {
 }
 
 /** Pass only full JSON lines. A warning or a truncated frame is logged and skipped. */
-export function jsonLineTransform(onSkip: (line: string) => void): Transform {
+export function jsonLineTransform(onSkip: (line: string) => void, onFirstLine?: (line: string) => void): Transform {
   let buffer = '';
+  let first = true;
   const keep = (line: string, out: string[]) => {
+    if (first) { first = false; onFirstLine?.(line); }
     const taken = takeJson(line);
     if (taken.skip) onSkip(taken.skip.length > 500 ? `${taken.skip.slice(0, 500)}…` : taken.skip);
     if (taken.json) out.push(taken.json);

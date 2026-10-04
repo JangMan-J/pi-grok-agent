@@ -78,7 +78,7 @@ export default async function grokModel(pi: ExtensionAPI) {
   // Live blocked Pi extension set: `/grok extensions` mutates this Set in place and persists it, so the
   // next Grok session lends the updated set without a Pi reload. (Grok reads the tool list once per session.)
   const blockedPiExtensions = new Set(config.blockedPiExtensions);
-  const connection = new GrokModelConnection({ watchdogMs: config.watchdogStallMs });
+  const connection = new GrokModelConnection(config.guard);
   let current: GrokModelSession | undefined;
   // Pi-side permission mode, persisted as `permissionMode` in grok-ws.json so a chosen `/grok perms`
   // survives Pi restarts. Applied to every Grok session in configure().
@@ -367,6 +367,6 @@ export default async function grokModel(pi: ExtensionAPI) {
   // Flush batched rows while the old session or branch is still current.
   pi.on('session_before_tree', () => { flushTools(); });
   pi.on('session_tree', (_event, ctx) => { lastCtx = ctx; current?.detach(); current = configure(new GrokModelSession(connection, ctx.sessionManager.getSessionId(), ctx.cwd), ctx); });
-  // close() ends the child and terminates the event-loop watchdog so it cannot outlive the session.
+  // close() ends the leash's stdin; the leash kills and reaps its Grok process group.
   pi.on('session_shutdown', async () => { flushTools(); current?.detach(); current = undefined; await connection.close(); });
 }

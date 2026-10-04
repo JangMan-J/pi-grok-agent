@@ -14,6 +14,7 @@ import { storedSessionAction } from '../src/model/child-report.ts';
 import { appendStdioLog, enqueueWrite } from '../src/model/stdio-log.ts';
 
 const FAKE_GROK = join(import.meta.dirname, 'fixtures', 'fake-grok.ts');
+const FAKE_LEASH = join(import.meta.dirname, 'fixtures', 'fake-leash.ts');
 chmodSync(FAKE_GROK, 0o755);
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 async function until(check: () => boolean, what: string, timeoutMs = 4000) {
@@ -28,7 +29,7 @@ function scratch() {
   return { home, log: join(home, 'received.jsonl'), stdioLog: join(home, 'grok-stdio.log'), cleanup: () => rmSync(home, { recursive: true, force: true }) };
 }
 function connect(s: ReturnType<typeof scratch>, env: NodeJS.ProcessEnv = {}, extra: ConstructorParameters<typeof GrokModelConnection>[0] = {}) {
-  return new GrokModelConnection({ binary: FAKE_GROK, env: { FAKE_GROK_LOG: s.log, ...env }, logPath: s.stdioLog, stopGraceMs: 40, ...extra });
+  return new GrokModelConnection({ leashPath: FAKE_LEASH, binary: FAKE_GROK, env: { FAKE_GROK_LOG: s.log, ...env }, logPath: s.stdioLog, stopGraceMs: 40, ...extra });
 }
 const received = (s: ReturnType<typeof scratch>, id: string) => (existsSync(s.log) ? readFileSync(s.log, 'utf8').split('\n').filter(Boolean).map((line) => JSON.parse(line)).filter((message) => message.id === id) : []);
 function alive(pid: number | undefined): boolean {
@@ -89,15 +90,15 @@ test('item 2: a child that exits between turns is respawned once, including two 
 
 test('item 3: a missing, non-executable, or pre-1.0.46 binary fails the turn with what to install', async (t) => {
   const s = scratch(); t.after(s.cleanup);
-  const missing = new GrokModelConnection({ binary: join(s.home, 'no-such-grok'), logPath: s.stdioLog, deadlines: { initialize: 1000 } });
+  const missing = new GrokModelConnection({ leashPath: FAKE_LEASH, binary: join(s.home, 'no-such-grok'), logPath: s.stdioLog, deadlines: { initialize: 1000 } });
   t.after(() => missing.close());
-  await assert.rejects(missing.open(), /was not found[\s\S]*PI_GROK_BINARY/);
+  await assert.rejects(missing.open(), /Cannot start pi-grok-leash[\s\S]*ENOENT/);
 
   const locked = join(s.home, 'locked-grok');
   writeFileSync(locked, '#!/usr/bin/env node\n', { mode: 0o644 });
-  const denied = new GrokModelConnection({ binary: locked, logPath: join(s.home, 'denied.log') });
+  const denied = new GrokModelConnection({ leashPath: FAKE_LEASH, binary: locked, logPath: join(s.home, 'denied.log') });
   t.after(() => denied.close());
-  await assert.rejects(denied.open(), /not executable[\s\S]*PI_GROK_BINARY/);
+  await assert.rejects(denied.open(), /Cannot start pi-grok-leash[\s\S]*EACCES/);
 
   const old = connect(s, { FAKE_GROK_USAGE_EXIT: '1' });
   t.after(() => old.close());
@@ -115,9 +116,9 @@ test('item 4: a signed-out child, including a failed authenticate, points at /gr
   assert.equal(auth.isOpen, false);
 });
 
-test('item 5: shutdown is EOF, then SIGTERM, then SIGKILL; a SIGKILL of Pi still closes stdin', async (t) => {
+test('item 5: explicit unguarded shutdown escalates EOF, SIGTERM, SIGKILL; parent death has only EOF protection', async (t) => {
   const s = scratch(); t.after(s.cleanup);
-  const stubborn = connect(s, { FAKE_GROK_IGNORE_EOF: '1', FAKE_GROK_IGNORE_TERM: '1' });
+  const stubborn = connect(s, { FAKE_GROK_IGNORE_EOF: '1', FAKE_GROK_IGNORE_TERM: '1' }, { leashPath: 'none' });
   const pid = await (async () => { await stubborn.open(); return stubborn.pid!; })();
   const closed = stubborn.close();
   await sleep(30);

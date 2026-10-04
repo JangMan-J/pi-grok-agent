@@ -39,52 +39,23 @@ export function parseToolBatchSize(value: unknown): number {
   throw new Error(`toolBatchSize must be a positive integer (got ${JSON.stringify(value)}).`);
 }
 
-/** Legacy guard settings remain validated for config compatibility, but stdio-direct does not arm timers. */
-export type GuardSettings = {
-  /** Legacy acknowledgement window. Default 5000. */
-  ackMs?: number;
-  /** Acked without dialog or check: a policy answer is expected promptly. Default 15000. */
-  policyMs?: number;
-  /** Acked with `check: true` (post_tool_use / stop running a command). Default 590000. */
-  checkBudgetMs?: number;
-  /** Acked with `dialog: true` (a human is deciding). Default 600000. */
-  dialogMs?: number;
-};
-/** Grok's own client-hook deadline cap (`MAX_HOOK_TIMEOUT_SECS`); every guard tier for hooks must stay below it. */
+/** Deadlines enforced by pi-grok-leash, independent of Pi's event loop. */
+export type GuardSettings = { stallMs?: number; requestMs?: number; dialogMs?: number };
+/** Grok's own client-hook deadline cap (`MAX_HOOK_TIMEOUT_SECS`). */
 export const GROK_HOOK_CAP_MS = 600_000;
-/**
- * Legacy ceiling for `ackMs` and `policyMs`. The registered `PreToolUse` timeout is 600 s (`CLIENT_HOOKS`);
- * the event-loop watchdog is the live guard. This constant stays so old guard configs still validate.
- */
-export const GATE_REGISTRATION_MS = 30_000;
-/** Default time the event loop may stay still while a reverse request is open before the child is killed. */
-export const WATCHDOG_STALL_MS = 1_000;
-
-export type WatchdogSettings = { stallMs?: number };
-
-/** `0` disables the watchdog. Env wins over the file. */
-export function resolveWatchdog(settings: WatchdogSettings | undefined, env: NodeJS.ProcessEnv = process.env): number {
-  const raw = env.PI_GROK_WATCHDOG_MS ?? settings?.stallMs;
-  if (raw === undefined || raw === '') return WATCHDOG_STALL_MS;
-  const n = Number(raw);
-  if (!Number.isFinite(n) || n < 0) throw new Error(`watchdog.stallMs must be a non-negative number of milliseconds, or 0 to disable (got ${String(raw)}).`);
-  return Math.floor(n);
-}
-const GUARD_DEFAULTS: Required<GuardSettings> = { ackMs: 5_000, policyMs: 15_000, checkBudgetMs: 590_000, dialogMs: 600_000 };
+const GUARD_DEFAULTS: Required<GuardSettings> = { stallMs: 1_000, requestMs: 25_000, dialogMs: 570_000 };
 
 export function resolveGuard(settings: GuardSettings | undefined, env: NodeJS.ProcessEnv = process.env): Required<GuardSettings> {
   const pick = (key: keyof GuardSettings, envName: string): number => {
     const raw = env[envName] ?? settings?.[key];
     if (raw === undefined || raw === '') return GUARD_DEFAULTS[key];
     const n = Number(raw);
-    if (!Number.isFinite(n) || n <= 0) throw new Error(`guard.${key} must be a positive number of milliseconds (got ${String(raw)}).`);
+    if (!Number.isFinite(n) || Math.floor(n) <= 0) throw new Error(`guard.${key} must be a positive number of milliseconds (got ${String(raw)}).`);
     return Math.floor(n);
   };
-  const guard = { ackMs: pick('ackMs', 'PI_GROK_ACK_MS'), policyMs: pick('policyMs', 'PI_GROK_POLICY_MS'), checkBudgetMs: pick('checkBudgetMs', 'PI_GROK_CHECK_BUDGET_MS'), dialogMs: pick('dialogMs', 'PI_GROK_DIALOG_MS') };
-  // A tier at or past Grok's own deadline would let Grok fail open first, which defeats the guard.
-  if (guard.ackMs >= GATE_REGISTRATION_MS || guard.policyMs >= GATE_REGISTRATION_MS) throw new Error('guard.ackMs and guard.policyMs must be below the pre_tool_use registration deadline (' + GATE_REGISTRATION_MS + ' ms).');
-  if (guard.checkBudgetMs >= GROK_HOOK_CAP_MS) throw new Error('guard.checkBudgetMs must be below Grok\'s hook cap (' + GROK_HOOK_CAP_MS + ' ms).');
-  if (guard.ackMs > guard.policyMs) throw new Error('guard.ackMs must not exceed guard.policyMs.');
+  const guard = { stallMs: pick('stallMs', 'PI_GROK_STALL_MS'), requestMs: pick('requestMs', 'PI_GROK_REQUEST_MS'), dialogMs: pick('dialogMs', 'PI_GROK_DIALOG_MS') };
+  if (guard.requestMs >= 30_000) throw new Error('guard.requestMs must be below the request deadline (30000 ms).');
+  if (guard.dialogMs >= GROK_HOOK_CAP_MS) throw new Error('guard.dialogMs must be below Grok\'s hook cap (' + GROK_HOOK_CAP_MS + ' ms).');
   return guard;
 }
 
@@ -106,7 +77,7 @@ export type HookSettings = {
 };
 
 export async function readConfig() {
-  let settings: { piTools?: PiToolPolicy; blockedPiExtensions?: string[]; permissionMode?: PiPermissionMode; toolBatchSize?: number; hooks?: HookSettings; headlessPermissions?: HeadlessPermissionPolicy; guard?: GuardSettings; watchdog?: WatchdogSettings; mediaDir?: string; grokMode?: GrokMode } = {};
+  let settings: { piTools?: PiToolPolicy; blockedPiExtensions?: string[]; permissionMode?: PiPermissionMode; toolBatchSize?: number; hooks?: HookSettings; headlessPermissions?: HeadlessPermissionPolicy; guard?: GuardSettings; mediaDir?: string; grokMode?: GrokMode } = {};
   try { settings = JSON.parse(await readFile(configPath, 'utf8')); }
   catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error; }
   const piTools: PiToolPolicy = process.env.PI_GROK_PI_TOOLS ? parsePolicy(process.env.PI_GROK_PI_TOOLS) : settings.piTools ?? 'extensions';
@@ -122,12 +93,11 @@ export async function readConfig() {
   const headlessPermissions = (process.env.PI_GROK_HEADLESS_PERMISSIONS as HeadlessPermissionPolicy | undefined) ?? settings.headlessPermissions ?? 'dialog';
   if (!['dialog', 'deny', 'reads', 'allow'].includes(headlessPermissions)) throw new Error(`headlessPermissions must be dialog, deny, reads, or allow (got ${headlessPermissions}).`);
   const guard = resolveGuard(settings.guard);
-  const watchdogStallMs = resolveWatchdog(settings.watchdog);
   // Where Pi copies Grok's generated media. Relative paths resolve against the Pi session cwd. Empty string disables the copy.
   const mediaDir = process.env.PI_GROK_MEDIA_DIR ?? settings.mediaDir ?? '.pi/grok-images';
   const grokMode = (process.env.PI_GROK_GROK_MODE as GrokMode | undefined) ?? settings.grokMode ?? 'default';
   if (!['default', 'auto', 'yolo'].includes(grokMode)) throw new Error(`grokMode must be default, auto, or yolo (got ${grokMode}).`);
-  return { piTools, blockedPiExtensions, permissionMode, toolBatchSize, hooks, headlessPermissions, guard, watchdogStallMs, mediaDir, grokMode };
+  return { piTools, blockedPiExtensions, permissionMode, toolBatchSize, hooks, headlessPermissions, guard, mediaDir, grokMode };
 }
 
 /**

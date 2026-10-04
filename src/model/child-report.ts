@@ -61,12 +61,20 @@ export function isTransportClose(error: unknown): boolean {
   return /ACP connection closed|connection closed|EPIPE|ECONNRESET|ERR_STREAM|socket hang up|the operation was aborted/i.test(message);
 }
 
-export function watchdogMessage(stallMs: number): string {
-  return `[grok: Pi stalled for ${stallMs} ms while a hook was pending; Grok was stopped so no unguarded tool ran]`;
+export function leashStallMessage(stallMs: number): string {
+  return `[grok stopped by pi-grok-leash: stall after ${stallMs} ms; no unguarded tool ran]`;
+}
+
+export function leashDeadlineMessage(method: string, id: unknown, ms: number): string {
+  return `[pi-grok-leash denied ${method} ${String(id)} after ${ms} ms: Pi did not answer]`;
+}
+
+export function leashStartMessage(path: string, detail: string, stderr = ''): string {
+  return `Cannot start pi-grok-leash: \`${path}\` ${detail}. Run \`npm run build:leash\`, or set PI_GROK_LEASH to the executable.${stderrTail(stderr)}`;
 }
 
 export function isExplained(message: string): boolean {
-  return /^(Cannot start Grok|Grok at |Grok child |Grok Build is not signed in|Grok did not answer |Grok did not acknowledge |Grok connection cancelled|\[grok: Pi stalled for )/.test(message);
+  return /^(Cannot start Grok|Grok at |Grok child |Grok Build is not signed in|Grok did not answer |Grok did not acknowledge |Grok connection cancelled|Cannot start pi-grok-leash|\[grok stopped by pi-grok-leash:|\[pi-grok-leash denied )/.test(message);
 }
 
 export function missingSessionNote(sessionId: string): string {
@@ -83,10 +91,9 @@ export function storedSessionAction(saved: { grokSessionId?: string; cwd?: strin
   return { notice: `[grok session ${saved.grokSessionId} belongs to ${saved.cwd}; started a new one]` };
 }
 
-export type ChildExitRecord = { at: string; code: number | null; signal: NodeJS.Signals | null; watchdog?: boolean };
+export type ChildExitRecord = { at: string; code: number | null; signal: NodeJS.Signals | null };
 
 export function formatExitRecord(exit: ChildExitRecord): string {
-  if (exit.watchdog) return `${exit.at} watchdog`;
   const how = exit.signal ? `signal ${exit.signal}` : `exit ${exit.code}`;
   return `${exit.at} ${how}`;
 }
