@@ -11,7 +11,7 @@ This page is the reference for settings, commands, and operation. Start with the
 - [Grok permission prompts](#grok-permission-prompts)
 - [Lent Pi tools](#lent-pi-tools)
 - [Hooks around Grok tools](#hooks-around-grok-tools)
-- [Close-time guard](#close-time-guard)
+- [Leash watchdog](#leash-watchdog)
 - [Generated media and attached images](#generated-media-and-attached-images)
 - [Settings](#settings)
 - [Environment variables](#environment-variables)
@@ -30,7 +30,8 @@ This page is the reference for settings, commands, and operation. Start with the
 | Pi extension | `src/model.ts` | Registers provider `grok`, the `/grok` command, the steer handler, and the renderers for `grok-tool`, `grok-tools`, `grok-media`, `grok-steer`, and `grok-command`. |
 | Tool rows | `src/tool-batch.ts` | Groups routine Grok tool calls into `grok-tools` rows. A failure, denial, media result, or post-edit note gets its own `grok-tool` row; it first writes the calls batched before it, so rows keep call order. |
 | Stream adapter | `src/model/provider.ts` | Turns a Pi turn into an ACP `session/prompt` and turns ACP updates into Pi stream events. |
-| Connection | `src/model/connection.ts` | One non-detached stdio agent child per Pi process. Creates or loads Grok sessions and routes reverse requests. |
+| Connection | `src/model/connection.ts` | Spawns one non-detached leash per Pi process, sends heartbeats and dialog extensions, creates or loads Grok sessions, and routes reverse requests. |
+| Leash | `leash/src/runtime.rs`, `leash/src/tracker.rs` | Rust process watchdog; group kill on Pi stall/EOF, deny/cancel on overdue tracked requests, late-reply suppression. |
 | Session state | `src/model/session.ts` | Turn state, hook answers, lent tool calls, media copies, usage totals. |
 | Hooks | `src/model/hooks.ts` | Tool classification, capability gate, post-edit check, stop check. |
 | Permissions | `src/model/permissions.ts` | Pi dialogs and headless answers for Grok permission prompts. |
@@ -38,13 +39,13 @@ This page is the reference for settings, commands, and operation. Start with the
 | Steering | `src/model/steer.ts` | Sends mid-turn Enter to Grok's `_x.ai/interject`. |
 | Lent tool policy | `src/tool-policy.ts`, `src/model/extensions-command.ts` | Selects the Pi tools lent to Grok, names them for MCP, and runs `/grok extensions`. |
 | Login | `src/login.ts` | Runs `grok login --device-auth` for `/grok login`. |
-| Settings | `src/config.ts` | Reads `grok-ws.json` and environment overrides. Validates legacy guard settings without applying timers. |
+| Settings | `src/config.ts` | Reads `grok-ws.json` and environment overrides. Validates leash stall, request, and dialog deadlines. |
 
 ## Install options
 
-Install with `pi install npm:pi-grok-agent`. For this prototype checkout, run `npm install`, then `pi -e . --model grok/grok-4.7`. Pi loads the TypeScript extension using its own loader.
+Install with `pi install npm:pi-grok-agent`. The npm tarball ships a **linux-x64** `bin/pi-grok-leash` (`package.json`, `.github/workflows/release.yml`). Other platforms must build from a repository checkout: `npm install`, then `npm run build:leash`, then load the checkout or set `PI_GROK_LEASH` to its binary. Rust **stable** is required (verified with rustc 1.99.0); no `rust-toolchain.toml` is present. The crate uses Unix APIs: other Unix builds/runtime are unverified and Windows is unsupported (`leash/README.md`, `leash/src/runtime.rs`). The npm tarball does not include the Rust crate, so source builds need the repository.
 
-The first Grok turn starts `grok --permission-mode default agent --no-leader stdio`; extension loading alone starts nothing. No daemon, shared leader, fixed port, or bearer secret is required. `src/model/connection.ts` owns only this child, ending it on connection close. Node >=22.19 and Grok on PATH (or `PI_GROK_BINARY`) are required. Grok uses its own stored login, not an xAI API key.
+For a built checkout, run `pi -e . --model grok/grok-4.7`. Pi loads the TypeScript extension using its own loader. The first Grok turn starts `pi-grok-leash`, which spawns `grok --permission-mode default agent --no-leader stdio`; loading the extension alone starts nothing. No daemon, shared leader, fixed port, or bearer secret is required. Closing the connection closes the leash's stdin, asking it to kill and reap Grok's group (`src/model/connection.ts`, `leash/src/runtime.rs`). Node >=22.19 and Grok on PATH (or `PI_GROK_BINARY`) are required. Grok uses its own stored login, not an xAI API key.
 
 ## Models and Pi controls
 
@@ -138,7 +139,7 @@ The core set Grok already has natively is always withheld under `extensions`: `r
 
 ### Blocked extension/tool surfaces
 
-Some Pi extensions duplicate or disrupt Grok native harness behavior, so Grok would route work through the MCP loopback instead of using its own tools. Under `extensions`, blocked extensions or tool surfaces are withheld on top of the core set. Package defaults (`DEFAULT_BLOCKED_PI_EXTENSIONS` in `src/tool-policy.ts`) are:
+Some Pi extensions duplicate or disrupt Grok native harness behavior, so Grok would route work through MCP-over-ACP instead of using its own tools. Under `extensions`, blocked extensions or tool surfaces are withheld on top of the core set. Package defaults (`DEFAULT_BLOCKED_PI_EXTENSIONS` in `src/tool-policy.ts`) are:
 
 - `pi-lens`: code-navigation tools such as `symbol_search`, `project_report`, `module_report`, `read_symbol`, `read_enclosing`, `lens_diagnostics`, and related lazy tools overlap Grok's native `read_file`, `grep`, `list_dir`, and LSP.
 - `codemode`: a meta-tool that can call other Pi tools and would bypass the curated lent-tool surface.
@@ -193,11 +194,31 @@ Precedence: `denyGrokTools`, then `allowGrokTools`, then the capability mirror, 
 
 Each completed Grok tool call becomes a consolidated session entry with the tool, input, status, output (up to 8000 characters), and duration. Routine completions batch into one `grok-tools` row per 10 calls (`N calls (2 read_file · 1 grep)` plus total ms; leftovers flush at turn end). Failures, denials, media captures, and post-edit notes keep their own `grok-tool` rows. The expanded batch view shows each call with up to 200 characters of output; the expanded single view shows up to 600. Turn usage is not a separate entry: the provider puts it on the assistant message in Pi's convention (`input` excludes cached reads; `cacheRead` separate), where Pi and zentui's Turn summary and footer cache figure already show it. Setup, MCP readiness, model switches, and intermediate tool phases are silent. No model receives these entries.
 
-## Close-time guard
+## Leash watchdog
 
-`src/model/guard.ts` tracks one lifetime for each reverse hook, permission prompt, or question. On orderly close it denies `pre_tool_use`, continues `post_tool_use` and `stop`, rejects permissions (prefer `reject_once`), and cancels questions. Late answers are suppressed. Slow dialogs get the handler's answer, not a timer denial (`test/transport.test.ts`).
+`pi-grok-leash` is a separate Rust process between Pi and Grok. Pi sends `pi/heartbeat` every 100 ms, including while idle. Missing heartbeats for `stallMs` kills Grok's process group; EOF does the same. On Linux, parent-death signals also kill the leash and its immediate Grok child when Pi dies abruptly. Unlike a thread inside Pi, the leash can run while the whole Pi process is paused (`src/model/connection.ts`, `leash/src/runtime.rs`, `test/leash-process.test.ts`).
 
-No ack tiers or timers are applied. Legacy `guard` values remain validated for config compatibility (`test/guard.test.ts`). **A hung-but-alive Pi is unguarded: Grok fails open at the hook timeout.** Stdio close covers Pi gone because the child is the agent itself. See [Failure modes](first-class-model.md#failure-modes).
+The leash tracks `_x.ai/hooks/run`, `session/request_permission`, and `_x.ai/ask_user_question`. An overdue hook gets `decision: deny`; permissions and questions get a cancelled outcome. The leash drops later replies for that ID. Opening a hook confirm, permission dialog, or question dialog sends `pi/extend` with the dialog budget; it never grants permission (`leash/src/tracker.rs`, `src/model/connection.ts`, `test/leash.test.ts`).
+
+| Setting in `guard` | Default | Environment override | Meaning |
+| --- | --- | --- | --- |
+| `stallMs` | 1000 ms | `PI_GROK_STALL_MS` | Maximum heartbeat silence before a group kill. |
+| `requestMs` | 25000 ms | `PI_GROK_REQUEST_MS` | Tracked reverse-request deadline; must be below 30000 ms. |
+| `dialogMs` | 570000 ms | `PI_GROK_DIALOG_MS` | Deadline from opening Pi UI; must be below Grok's 600000 ms hook cap. |
+
+Environment values override `grok-ws.json`. Values must be finite positive milliseconds and are floored to integers (`src/config.ts` `resolveGuard`, `test/config.test.ts`).
+
+A stall ends the running turn with `[grok stopped by pi-grok-leash: stall after <N> ms; no unguarded tool ran]`; the next turn respawns and loads the stored session. A deadline instead shows `[pi-grok-leash denied <method> <id> after <N> ms: Pi did not answer]`, aborts the expired dialog/handler, and **keeps the child and turn running**. This is the `d4e5891` behavior; it supersedes the earlier frame contract's instruction to end the turn on `deadline`. The stall message is not a guarantee about tools already executing outside Grok's group. Child exits still end an active turn (`src/model/child-report.ts`, `src/model/connection.ts`, `test/leash.test.ts`).
+
+`/grok debug` shows leash path/version, leash and Grok PIDs, all three deadlines, the last five leash events with timestamps, late-reply count, and the last three child exit statuses. Deadlines appear in leash events, not child exits (`connection.ts` `debugLines`, `test/leash.test.ts`).
+
+Set `PI_GROK_LEASH_LOG` to an append-only log path. The Rust log contains start/child arguments, leash events (`ready`, `stall`, `deadline`, `parent-gone`, `child-exit`, `late-reply`), and a graceful exit record with malformed-line count. It does not log every heartbeat or frame and does not rotate. Abrupt SIGKILL cannot write an exit record. This is separate from Pi's [stdio log](#stdio-log) (`leash/src/runtime.rs`, `leash/tests/process.rs`).
+
+Executable resolution is `PI_GROK_LEASH`, then executable `<package root>/bin/pi-grok-leash`, then `pi-grok-leash` on PATH. A missing leash refuses startup and names `npm run build:leash`; it does not silently fall back to direct Grok. `PI_GROK_LEASH=none` explicitly opts out and `/grok debug` says **UNGUARDED** (`src/model/connection.ts` `resolveLeash`, `test/leash.test.ts`).
+
+Residuals: stalls shorter than `stallMs`; effects of a tool already executing when the kill lands; tools/grandchildren outside Grok's group; abrupt Linux Pi SIGKILL kills leash → Grok through parent-death signals but not Grok's entire group. Whole-machine suspension stops all processes: monotonic timing and a gap greater than `10 × stallMs` re-baseline avoid a false kill on resume. Simulated suspension is covered in `test/leash-process.test.ts`; actual laptop suspend and live Grok-with-leash probes remain **unverified** (`leash/src/tracker.rs`, `leash/README.md`).
+
+The old `src/model/guard.ts` is removed. Pi-to-Grok request timeouts still live in `connection.ts` `guardedRequest`; they are distinct from the leash's three reverse-request deadlines (`test/hardening.test.ts`).
 
 ## Generated media and attached images
 
@@ -230,7 +251,7 @@ Optional settings file: `~/.pi/agent/grok-ws.json`. If `PI_CODING_AGENT_DIR` is 
     "postEditCheck": "",
     "stopCheck": ""
   },
-  "guard": { "ackMs": 5000, "policyMs": 15000, "checkBudgetMs": 590000, "dialogMs": 600000 }
+  "guard": { "stallMs": 1000, "requestMs": 25000, "dialogMs": 570000 }
 }
 ```
 
@@ -270,7 +291,9 @@ Example with checks:
 | `PI_GROK_DENY_TOOLS` | `hooks.denyGrokTools`, comma-separated |
 | `PI_GROK_POST_EDIT_CHECK` | `hooks.postEditCheck` |
 | `PI_GROK_STOP_CHECK` | `hooks.stopCheck` |
-| `PI_GROK_ACK_MS`, `PI_GROK_POLICY_MS`, `PI_GROK_CHECK_BUDGET_MS`, `PI_GROK_DIALOG_MS` | Legacy `guard` values: validated but no timers are armed |
+| `PI_GROK_STALL_MS`, `PI_GROK_REQUEST_MS`, `PI_GROK_DIALOG_MS` | `guard.stallMs`, `guard.requestMs`, `guard.dialogMs`; see [Leash watchdog](#leash-watchdog) |
+| `PI_GROK_LEASH` | Leash executable override, or `none` for explicit UNGUARDED operation |
+| `PI_GROK_LEASH_LOG` | Append-only Rust leash event log path |
 | `PI_GROK_BINARY` | Grok executable, read at spawn time. Default `grok`. |
 
 ## Session lifecycle
@@ -307,15 +330,19 @@ Use `PI_CODING_AGENT_DIR` for separate Pi settings/sessions and `PI_GROK_BINARY`
 
 ```sh
 npm install          # includes TypeScript and type packages
+npm run build:leash   # Rust stable; builds bin/pi-grok-leash
 npm run check        # tsc --noEmit
 npm test             # node --test test/*.test.ts, no Grok calls
+npm run test:leash-real # Pi integration with the Rust leash and fake Grok
 ```
 
-`test/transport.test.ts` starts real stdio children using `test/fixtures/fake-grok.ts`. It checks exact argv, child reuse/drop, signed-out retry, in-process MCP during attach, model selection, orphan hooks, slow dialogs, close-time answers, late suppression, failed attach routing, and startup failures. `test/hardening.test.ts` covers one failure mode per numbered case in [Failure modes](first-class-model.md#failure-modes). No real Grok is run.
+`test/transport.test.ts` starts real stdio children using `test/fixtures/fake-grok.ts` for transport/session behavior. `test/hardening.test.ts` covers request timeouts and recovery. `test/leash.test.ts` covers framing, heartbeat consumption, dialog extensions, synthetic denials, late replies, startup failures, debug output, and turn recovery; `npm run test:leash-real` runs it against `bin/pi-grok-leash` and skips when that binary is absent. `test/leash-process.test.ts` uses `test/fixtures/leash-parent.ts` for Pi SIGKILL with a pending hook, Pi SIGSTOP for 3 s with a pending hook and while idle, and a 15 s pause of Pi + leash + fake Grok (suspend guard). These Linux process checks require the built binary and add roughly 30 s. `leash/tests/process.rs` provides Rust process coverage. No real Grok is run.
 
-The unit tests cover the turn split around a lent tool call, abort and resend, prompt tail selection, display-only messages, usage mapping, tool classification and gates, `/grok perms` modes, guard tier validation, question dialogs, steering with a mocked Grok, the steer handler across a model switch, `/grok` command timeout and completion through the shared prompt lifetime, media copies, the lent tool policy and names, `/grok extensions`, `/grok login` output parsing, and context windows from Grok's model cache.
+The unit tests cover the turn split around a lent tool call, abort and resend, prompt tail selection, display-only messages, usage mapping, tool classification and gates, `/grok perms` modes, leash deadline validation, question dialogs, steering with a mocked Grok, the steer handler across a model switch, `/grok` command timeout and completion through the shared prompt lifetime, media copies, the lent tool policy and names, `/grok extensions`, `/grok login` output parsing, and context windows from Grok's model cache.
 
 ## Live probes
+
+**Live probes against real Grok with the leash have not been run.** The results below predate the leash and do not verify it.
 
 Live probes spend Grok usage: run only when explicitly requested. `scripts/model-probe.ts` checks `_x.ai/mcp/sdk_call` for a Pi-held tool. `scripts/reconnect-probe.ts` restarts Pi and checks `session/load` of the stored Grok session. `npm run test:live` invokes those two probes. They write `evidence/model-probe.json` and `evidence/reconnect-probe.json`. Both passed on 2026-10-04 (`docs/launch-verification.md`).
 
@@ -333,7 +360,10 @@ Live probes spend Grok usage: run only when explicitly requested. `scripts/model
 | `Cannot start Grok: \`…\` is not executable` | The file at `PI_GROK_BINARY` cannot be executed. | Point `PI_GROK_BINARY` at a Grok Build binary you can run. |
 | `does not provide \`agent --no-leader stdio\`` | The binary exited during startup with code 2 or a usage error. It is older than Grok Build 1.0.46, or it rejects `--no-leader`. Stderr is included in the message. | Install Grok Build 1.0.46 or newer, or set `PI_GROK_BINARY` to that executable. |
 | `Grok Build is not signed in. Run /grok login, …` | `initialize` returned no `cached_token` method, or `authenticate` failed. | Run `/grok login` and approve the code, then send the message again. Pi's `/login` xAI entry signs in a different client. `XAI_API_KEY` does not replace Grok's stored login. |
-| A `grok` process remains after Pi was killed with `SIGKILL` | Node cannot set a parent-death signal. Closing Pi's pipes is the only signal the child gets. The child exits when it stops on stdin EOF. | Kill the leftover process. A normal Pi exit, `SIGINT`, or `SIGTERM` closes stdin, then sends `SIGTERM`, then `SIGKILL`. |
+| `[grok stopped by pi-grok-leash: stall after <N> ms; no unguarded tool ran]` | Pi stopped heartbeating; the leash killed Grok's group (`test/leash-process.test.ts`). | Check for an event-loop hang or debugger/process pause. Resume Pi if paused; the next turn respawns and loads the session. |
+| `[pi-grok-leash denied <method> <id> after <N> ms: Pi did not answer]` | A tracked request or extended dialog expired (`test/leash.test.ts`). | The request was denied/cancelled, not approved. The same child and turn continue; inspect the slow handler or dialog and `/grok debug`. |
+| `Cannot start pi-grok-leash … npm run build:leash` | The leash is missing, not executable, incompatible, or failed before ready (`src/model/child-report.ts`, `test/leash.test.ts`). | Build from a repository checkout with Rust stable and `npm run build:leash`; check `PI_GROK_LEASH` and the included stderr. |
+| A descendant remains after Pi SIGKILL | Linux parent-death signals kill leash and immediate Grok, not Grok's whole group; escaped tool processes can survive even a group kill (`leash/src/runtime.rs`). | Identify and stop the leftover process. Check `/grok debug` for `UNGUARDED` if the leash was disabled; non-Linux behavior is unverified. |
 | `grok-stdio.log` contains `framing: skipped non-JSON stdout` and the turn continues | The child wrote a warning, or a partial line, on stdout. A prefix glued to the next `{"jsonrpc"` frame is skipped and the frame is kept. | None. Child stderr is in the same log. It is kept off Pi's stdout. |
 | A tool result of several megabytes pauses, then completes | `stdin.write` returned false because the pipe buffer was full. | None. The next write waits until the buffer drains. |
 | `Grok did not answer <method> within Ns. The child was stopped.` | The child missed its deadline: `initialize` and `authenticate` 30 s, `session/new` and `session/load` 60 s, `session/set_mode` and `session/set_config_option` 10 s, other requests 30 s. `session/prompt` has no deadline. | Send the message again. The child was killed. The next turn starts a new child and loads the stored session. |

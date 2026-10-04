@@ -69,6 +69,7 @@
     "node": ">=22.19.0"
   },
   "files": [
+    "bin",
     "src",
     "docs/usage.md",
     "docs/first-class-model.md",

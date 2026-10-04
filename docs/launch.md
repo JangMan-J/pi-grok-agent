@@ -10,7 +10,7 @@ This file holds the capability ledger, launch gates, channel drafts, schedule, r
 - GitHub: `JangMan-J/pi-grok-agent` is already public.
 - npm: `pi-grok-agent@0.1.0` published 2026-09-28 by `jangmanj`, from `821bd0b`. The Pi package gallery lists npm packages.
 - Pi repository: the installed Pi 0.87.1 `package.json` names `github.com/earendil-works/pi` (the research digests cite `pi0/pi-mono` and `badlogic/pi-mono`, which are wrong).
-- Install path: `pi install npm:pi-grok-agent` for published releases; this prototype can be loaded from its clone with `pi -e .`. The first turn starts one `--no-leader stdio` child (`src/model/connection.ts`). Historical install results in [launch-verification.md](launch-verification.md) predate this transport.
+- Install path: `pi install npm:pi-grok-agent` for published releases; this prototype can be loaded from its clone with `pi -e .`. The first turn starts one leash, which spawns a `--no-leader stdio` child (`src/model/connection.ts`, `leash/src/runtime.rs`). Historical install results in [launch-verification.md](launch-verification.md) predate this transport.
 - Pi compatibility: tested with Pi 0.87.1 only. Other Pi versions are untested. Node.js 22.19 is Pi's minimum. This package is tested only on Node.js 26.10.0. Do not write "Pi 0.87+".
 - GitHub About, applied 2026-09-28: the description and topics from [docs/github-presentation.md](github-presentation.md) are live, and [docs/assets/old/social-preview.png](assets/old/social-preview.png) was the social preview (the served image matched the committed PNG by SHA-256). Its replacement, [docs/assets/social-1280x640.png](assets/social-1280x640.png), was uploaded and verified the same way on 2026-09-30. Details in section 5.1.
 
@@ -38,7 +38,7 @@ Tracked tests versus current baseline: the tracked suite is 33 test cases in fiv
 | Grok permission prompts as Pi dialogs, headless policy, and `/grok perms yolo` selecting allow once | Unit | `src/model/permissions.ts`, `test/permissions.test.ts`, `headlessPermissions` in `src/config.ts` |
 | Pi gates Grok tools (`pre_tool_use`), post-edit check, stop check | Unit. Live 2026-09-28 (`hooks-live` 3/3, `hooks-probe`). | `test/hooks.test.ts`, `scripts/hooks-live.sh` |
 | `/grok perms yolo, auto, ask, read-only` | Unit | `test/hooks.test.ts` "/grok perms" tests; `test/permissions.test.ts` for allow once on `session/request_permission` |
-| Close-time reverse-request guard; one answer and late suppression, no timers | Fake-child tests; hung Pi unguarded | `src/model/guard.ts`, `test/transport.test.ts` |
+| Separate-process leash: heartbeat stall kills Grok's group; overdue tracked requests get deny/cancel and late suppression | Fake-child tests; live Grok-with-leash unverified | `leash/src/runtime.rs`, `leash/src/tracker.rs`, `test/leash.test.ts`, `test/leash-process.test.ts` |
 | `ask_user_question` as Pi dialogs | Unit. Live 2026-09-28 (`question-probe`). | `test/questions.test.ts` |
 | Image generation: copied to `.pi/grok-images/`, shown inline after the turn | Unit. Live 2026-09-28 (`image-probe`: `image_gen` result shape and path; the inline display step is not covered by the probe). | `copyMedia`, `flushMedia`, `test/hooks.test.ts` "media copy", `scripts/image-probe.ts` (probes `image_gen` only) |
 | Inline image display | Conditional | The terminal must support images. Every non-PNG preview (JPEG, WebP, GIF) needs ImageMagick `magick` for the PNG conversion (`asPng` in `src/model.ts`). Without it, only the path shows. |
@@ -59,7 +59,7 @@ Facts for the README and every post:
 
 - Pi packages run with the user's permissions (Pi `docs/packages.md`).
 - Grok runs as the operating-system user. Its session directory is not a sandbox.
-- ACP uses stdio pipes to one non-detached agent child. Lent tools use `_x.ai/mcp/sdk_call` on that pipe (`src/model/connection.ts`).
+- ACP uses stdio pipes through one non-detached leash to its Grok agent child. Lent tools use `_x.ai/mcp/sdk_call` on the same pipe (`src/model/connection.ts`, `leash/src/runtime.rs`).
 - The child uses default permission mode, never `--always-approve`, and forces `GROK_DISABLE_AUTOUPDATER=1`.
 - Grok usage counts against the user's Grok account.
 
@@ -69,9 +69,9 @@ Three separate permission layers. Do not merge them in copy:
 - Deny and allow overrides (`denyGrokTools`, `allowGrokTools`, `PI_GROK_DENY_TOOLS`) are checked first in `capabilityGate` (`src/model/hooks.ts`). An explicit deny wins over an allow entry, and both win over the mirror.
 - Grok's own permission prompts are a different path. `grokMode` (`default`, `auto`, `yolo`) sets Grok's session mode (`yoloMode` and `autoMode` in `_meta`, `src/model/connection.ts`). `auto` and `yolo` remove Grok's confirmation prompts and are opt-in. With a UI, Pi shows the prompts that still arrive as dialogs, unless `/grok perms` is `yolo`, which selects allow once. Headless Pi uses `headlessPermissions`: the default `dialog` rejects, and `deny`, `reads`, `allow` are the other choices (`src/config.ts`). `yolo` selects allow once in headless Pi too.
 
-Hook failures fail open, as Grok's own hooks do. The close-time guard answers pending requests once during orderly shutdown, with no ack deadlines. A hung-but-alive Pi is unguarded. A detached Pi session still denies every `pre_tool_use` (`src/model/connection.ts`, `test/transport.test.ts`).
+The leash denies/cancels overdue hooks, permissions, and questions, and kills Grok's group when Pi misses its heartbeat window. A deadline is a notice, not a turn/child stop (`d4e5891`, `src/model/connection.ts`, `test/leash.test.ts`). A detached Pi session still denies every `pre_tool_use` (`test/transport.test.ts`). Residuals include processes outside Grok's group and abrupt parent death killing only leash and immediate Grok; see [Failure modes](first-class-model.md#failure-modes).
 
-Live probes are opt-in. The adapted model and Pi-restart probes have not been run for this implementation. Gateway-only probes exit 2. See [usage](usage.md#live-probes).
+Live probes are opt-in. The adapted model and Pi-restart probes have not been run with the leash; older direct-agent results do not verify it. Gateway-only probes exit 2. See [usage](usage.md#live-probes).
 
 ## 4. Launch gates
 
@@ -83,7 +83,7 @@ Each gate must pass before the first public post. Record runtime results in [`do
 | G3 | Loading the extension does not spawn Grok; no secret file exists in this transport (`test/extension.test.ts`). | Main |
 | G4 | Live claims have current results in [docs/launch-verification.md](launch-verification.md), with Node, Pi, and Grok versions. README claims without a result are reworded. Ordinary verification is already authorized. Run of 2026-09-28: 8 probes passed on Node.js 26.10.0, Pi 0.87.1, Grok Build 1.0.41. Steering effect and reconnect remain uncovered. | Main |
 | G5 | Closed in code: the registered `input` handler acts only while the active provider is `grok` (`src/model.ts`, `test/extension.test.ts`). The live effect of an interjection on a running turn is still unverified, so keep steering out of the demo until a raw take shows it. | Main |
-| G6 | README and `docs/first-class-model.md` fixes found in review (Node 22.19, stdio child lifetime, hung-Pi limit, qualified claims, broken references). | Main |
+| G6 | README and `docs/first-class-model.md` fixes found in review (Node 22.19, leash/child lifetime, stall protection and residuals, qualified claims, broken references). | Main |
 | G7 | Sanitized recordings and evidence. Before any recording, screenshot, transcript, or `evidence/` file is committed or posted, remove or redact prompts that are not demo prompts, `/grok debug` output and hook feedback that show paths, session IDs, or tokens, account details, and home paths (use `~/`). `evidence/` is in `.gitignore`, so probe results stay local. | Owner, Main |
 | G8 | A demo recorded from a real run, per [`docs/demo.md`](demo.md), after G7. A take from 2026-09-28 exists, edited with title and end cards and the home path masked (checked by OCR on every quarter second of the turn). Not in the repository. | Owner |
 | G9 | Channel links and rules checked on the day of each post (section 5). | Owner |
@@ -219,7 +219,7 @@ An engineering note, not a pitch:
 Title idea: "Keeping a coding agent's harness when another agent drives it".
 
 1. Dedicated stdio agents and the temporary HTTP-versus-SDK MCP comparison (`docs/first-class-model.md`).
-2. Fail-open hook timeouts and close-time late-answer suppression (`test/transport.test.ts`).
+2. Leash deadlines (deny/cancel, never approval), heartbeat stalls, and late-answer suppression (`test/leash.test.ts`, `leash/tests/process.rs`).
 3. Grok's `x.ai/tool` stamp as the classification source.
 4. Measured numbers only from [docs/launch-verification.md](launch-verification.md).
 5. The limits, and the feedback you want.
