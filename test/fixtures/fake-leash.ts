@@ -2,7 +2,7 @@
 // EOF-only stand-in for pi-grok-leash; no native parent-death signal support.
 import { spawn } from 'node:child_process';
 import { once } from 'node:events';
-import { appendFileSync } from 'node:fs';
+import { appendFileSync, openSync } from 'node:fs';
 import { constants } from 'node:os';
 import { performance } from 'node:perf_hooks';
 import type { Readable, Writable } from 'node:stream';
@@ -41,6 +41,13 @@ for (; i < args.length && args[i] !== '--'; i += 2) {
 if (!parent || args[i] !== '--' || !args[i + 1]) usage();
 if (process.ppid !== parent) process.exit(3);
 recordTrace({ event: 'argv', argv: args });
+let logFd: number | undefined;
+try { if (log !== undefined) logFd = openSync(log, 'a'); }
+catch (error) { console.error(String(error)); process.exit(1); }
+function logLine(line: string) {
+  // Like Rust's logger, a write failure must not change protocol/lifetime behavior.
+  try { if (logFd !== undefined) appendFileSync(logFd, line); } catch { /* Best-effort log. */ }
+}
 
 // Keep the original bytes, including CRLF and any unterminated final fragment.
 async function* lines(stream: Readable) {
@@ -73,7 +80,7 @@ const child = spawn(args[i + 1], args.slice(i + 2), {
 });
 try { await once(child, 'spawn'); }
 catch (error) { console.error(String(error)); process.exit(1); }
-if (log) appendFileSync(log, JSON.stringify({ event: 'start', parent, args: args.slice(i + 1) }) + '\n');
+logLine(JSON.stringify({ event: 'start', parent, args: args.slice(i + 1) }) + '\n');
 const childExit = new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((resolve) => {
   child.once('exit', (code, signal) => resolve({ code, signal }));
 });
@@ -137,7 +144,7 @@ function expire(now: number) {
 }
 function event(name: string, params: Record<string, unknown> = {}) {
   const line = JSON.stringify({ jsonrpc: '2.0', method: 'pi/leash', params: { event: name, ...params } }) + '\n';
-  if (log) appendFileSync(log, line);
+  logLine(line);
   return toPi(line);
 }
 function killGroup() {
@@ -152,7 +159,7 @@ async function finish(code: number, kill: boolean, notification?: { name: string
   if (kill) killGroup();
   await childExit;
   if (notification) await event(notification.name, notification.params);
-  if (log) appendFileSync(log, JSON.stringify({ event: 'exit', code, malformed }) + '\n');
+  logLine(JSON.stringify({ event: 'exit', code, malformed }) + '\n');
   await toPi('');
   process.stdout.end(() => process.exit(code));
 }

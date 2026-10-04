@@ -412,6 +412,22 @@ test('log contains only start, verbatim leash events, and exit with malformed co
   assert.deepEqual(rows(s.log).filter((m) => m.params).map((m) => m.params.event), ['ready', 'parent-gone']);
 });
 
+test('log open failure refuses to spawn; later log write failures do not change child status', async (t) => {
+  const s = setup(t), marker = join(s.home, 'spawned');
+  const command = [process.execPath, '-e', `require('node:fs').writeFileSync(${JSON.stringify(marker)}, 'spawned'); process.exit(23);`];
+  const r = rawLeash(t, ['--log', join(s.home, 'missing', 'log')], command);
+  assert.deepEqual(await r.exited, [1, null]);
+  assert.equal(existsSync(marker), false);
+  assert.deepEqual(r.lines, []);
+  if (existsSync('/dev/full')) {
+    const full = rawLeash(t, ['--log', '/dev/full'], command);
+    assert.deepEqual(await full.exited, [23, null]);
+    await until(() => full.messages.some((m) => m.params?.event === 'child-exit'), 'child exit despite log write failure');
+    assert.equal(full.messages[0].params.event, 'ready');
+    assert.equal(full.messages.at(-1).params.code, 23);
+  }
+});
+
 test('65th outstanding request is not forwarded and causes only stall with configured ms', async (t) => {
   const script = `for (let id = 0; id < 65; id++) console.log(JSON.stringify({jsonrpc:'2.0',id,method:'_x.ai/hooks/run'})); setInterval(() => {}, 60000);`;
   const r = rawLeash(t, [], [process.execPath, '-e', script]);
