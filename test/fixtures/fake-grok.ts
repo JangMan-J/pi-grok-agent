@@ -26,6 +26,7 @@
 //   FAKE_GROK_IGNORE_TERM=1    ignore SIGTERM
 //   FAKE_GROK_LOG_BYTES=1      log byte counts for lines over 4 KB instead of the line
 //   FAKE_GROK_TOOL_RAN_MS      after a pre_tool_use emit, write FAKE_GROK_TOOL_RAN if still unanswered (fail-open stand-in)
+//   FAKE_GROK_TOOL_MARKER + FAKE_GROK_HOOK_FAIL_OPEN_MS: append a tool marker on hook timeout or a continue reply
 import { appendFileSync, unlinkSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:net';
 import { createInterface } from 'node:readline';
@@ -109,6 +110,20 @@ if (args.includes('leader')) {
         const key = JSON.stringify(message.params.id);
         const prev = waiters.get(key);
         waiters.set(key, (response) => { clearTimeout(timer); prev?.(response); });
+      }
+      const toolMarker = process.env.FAKE_GROK_TOOL_MARKER;
+      const failOpenMs = Number(process.env.FAKE_GROK_HOOK_FAIL_OPEN_MS ?? 0);
+      if (hook && toolMarker && failOpenMs > 0 && message.params?.id != null) {
+        const key = JSON.stringify(message.params.id);
+        const previous = waiters.get(key);
+        const runTool = () => appendFileSync(toolMarker, 'ran\n');
+        let ran = false;
+        const timer = setTimeout(() => { ran = true; runTool(); }, failOpenMs);
+        waiters.set(key, (response) => {
+          clearTimeout(timer);
+          if (!ran && response.result?.decision === 'continue') runTool();
+          previous?.(response);
+        });
       }
       send(message.params);
       return;
