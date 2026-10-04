@@ -1,0 +1,9 @@
+[package]
+name = "pi-grok-leash"
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0"
+description = "A stdio watchdog for Pi's Grok child"
+
+[dependencies]
+libc = "0.2"
