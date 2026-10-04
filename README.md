@@ -38,7 +38,7 @@ Pi drives the session using the [Agent Client Protocol](https://agentclientproto
 
 - Pi sets permissions and boundaries. Read-only, ask, auto, and YOLO permission modes are supported.
 - Pi makes the decisions. Pi allows or denies each of Grok's tool calls. In interactive Pi, Grok's permission prompts and `ask_user_question` prompts open as Pi dialogs.
-- Grok can use Pi's extension tools. They are lent over MCP as `pi__<name>`, and the result continues the same Grok turn.
+- Grok can use Pi's extension tools. They are lent over MCP with `pi_`-prefixed names and mapped back to the original Pi tool names when Pi executes them; the result continues the same Grok turn.
 - Grok keeps all of its tools and extensions. My own observations have been that Grok performs better with its native toolset, so this project's purpose is to keep its tools without buying the shed.
 
 ## Models

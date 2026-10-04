@@ -4,3 +4,4 @@ node_modules/
 .pi/grok-images/
 package-lock.json
 dist/
+HANDOFF-*.md

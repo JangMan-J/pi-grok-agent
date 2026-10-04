@@ -4,7 +4,7 @@
 import { createAssistantMessageEventStream, getCurrentSystemPrompt, getCurrentTools, type AssistantMessage, type AssistantMessageEventStream, type Message, type Model, type Api, type SimpleStreamOptions, type ToolCall, type ToolResultMessage, type TranscriptContext, type Usage } from '@earendil-works/pi-ai';
 import type { GrokModelConnection } from './connection.ts';
 import { GrokModelSession, type TurnEvent, type GrokTurnUsage } from './session.ts';
-import { selectPiTools, type PiToolPolicy } from '../config.ts';
+import { createPiToolRoutes, selectPiTools, type PiToolAttribution, type PiToolPolicy } from '../tool-policy.ts';
 
 /** Same marker as model.ts; kept here to avoid importing the extension entry from the provider. */
 const GROK_DISPLAY_ONLY = '\u200b[grok-display]';
@@ -39,8 +39,42 @@ export const GROK_API = 'grok-acp' as Api;
 export const MODEL_IDS = ['grok-4.7', 'grok-4.7-build-fast', 'grok-4.6', 'grok-4.5'];
 const BATCH_GRACE_MS = 150;
 const PREAMBLE_LIMIT = 60_000;
+const PI_HARNESS_PROMPT_SECTIONS = ['tools', 'rules', 'docs', 'skills'];
 
-export interface SessionResolver { current(): GrokModelSession | undefined; piTools?: PiToolPolicy; piToolBlacklist?: Iterable<string>; }
+export interface SessionResolver { current(): GrokModelSession | undefined; piTools?: PiToolPolicy; blockedPiExtensions?: Iterable<string>; getPiToolAttributions?: () => readonly PiToolAttribution[]; }
+
+function removeXmlSection(text: string, tag: string): string {
+  const open = `<${tag}>`;
+  const close = `</${tag}>`;
+  const kept: string[] = [];
+  let skipping = false;
+  for (const line of text.split('\n')) {
+    const trimmed = line.trim();
+    if (trimmed === open) { skipping = true; continue; }
+    if (skipping) {
+      if (trimmed === close) skipping = false;
+      continue;
+    }
+    kept.push(line);
+  }
+  return kept.join('\n');
+}
+
+/**
+ * Pi's system prompt describes Pi's own harness tools. Grok does not receive those tool schemas, so sending
+ * that prose makes Grok believe tools such as codemode/read/edit are callable when they are not. Keep project
+ * and user context, but strip Pi-harness catalog/rule sections before sending `_meta.rules` to Grok.
+ */
+export function grokRulesFromPiPrompt(systemPrompt: string | undefined): string | undefined {
+  let prompt = systemPrompt ?? '';
+  for (const section of PI_HARNESS_PROMPT_SECTIONS) prompt = removeXmlSection(prompt, section);
+  prompt = prompt.replace(/\n{3,}/gu, '\n\n').trim();
+  const bridge = [
+    'You are Grok Build running under Pi. Use Grok native tools for files, shell, search, code navigation, images, permissions, subagents, and other harness features.',
+    'Pi may lend extra tools over MCP; those callable tools are explicitly named with a pi_ prefix. Do not call or refer to unprefixed Pi harness tools unless they appear in your callable tool schema list.',
+  ].join('\n');
+  return prompt ? `${bridge}\n\n${prompt}` : bridge;
+}
 
 function zeroUsage(): Usage { return { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } }; }
 
@@ -126,9 +160,12 @@ export function createGrokStream(connection: GrokModelConnection, sessions: Sess
       await connection.open(signal);
       const isNew = !session.grokSessionId;
       const piTools = getCurrentTools(context.messages);
+      const piToolAttributions = sessions.getPiToolAttributions?.() ?? [];
       session.piToolNames = piTools.map((t) => t.name);
-      session.tools = selectPiTools(piTools, sessions.piTools ?? 'extensions', sessions.piToolBlacklist);
-      await session.attach(getCurrentSystemPrompt(context.messages) || undefined);
+      session.piToolAttributions = piToolAttributions;
+      session.tools = selectPiTools(piTools, sessions.piTools ?? 'extensions', sessions.blockedPiExtensions, piToolAttributions);
+      session.piToolRoutes = createPiToolRoutes(session.tools, piToolAttributions);
+      await session.attach(grokRulesFromPiPrompt(getCurrentSystemPrompt(context.messages) || undefined));
       await session.applyModel(model.id); // before the effort: grok-4.5 has no xhigh
       await session.applyEffort(options?.reasoning); // Pi's thinking level drives Grok's reasoning_effort
       signal?.throwIfAborted();

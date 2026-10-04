@@ -3,7 +3,7 @@ import { test } from 'node:test';
 import { Type } from '@earendil-works/pi-ai';
 import { normalizeContext, type Message, type Model, type Api } from '@earendil-works/pi-ai';
 import { GrokModelSession } from '../src/model/session.ts';
-import { createGrokStream, splitTail, promptTextFor, GROK_API } from '../src/model/provider.ts';
+import { createGrokStream, splitTail, promptTextFor, grokRulesFromPiPrompt, GROK_API } from '../src/model/provider.ts';
 import type { SessionHandlers } from '../src/model/connection.ts';
 
 const model: Model<Api> = { id: 'grok-4.7', name: 'Grok', api: GROK_API, provider: 'grok', baseUrl: 'ws://127.0.0.1:1/ws', reasoning: true, input: ['text'], cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, contextWindow: 1000, maxTokens: 100 } as Model<Api>;
@@ -29,6 +29,25 @@ function fakeConnection() {
 
 async function collect(stream: AsyncIterable<any>) { const events: any[] = []; for await (const e of stream) events.push(e); return events; }
 
+test('Grok rules strip Pi harness tool prose but keep project context', () => {
+  const rules = grokRulesFromPiPrompt([
+    'preamble',
+    '<tools>',
+    '- codemode: Run JavaScript that calls other tools',
+    '</tools>',
+    '<rules>',
+    '- Use codemode to batch independent tool calls.',
+    '</rules>',
+    '<project_context>',
+    'Project rule stays.',
+    '</project_context>',
+  ].join('\n'))!;
+  assert.match(rules, /Grok Build running under Pi/);
+  assert.match(rules, /Project rule stays\./);
+  assert.doesNotMatch(rules, /codemode/);
+  assert.doesNotMatch(rules, /Use codemode/);
+});
+
 test('one Grok turn becomes two Pi assistant messages around a Pi tool call', async () => {
   const fake = fakeConnection();
   const session = new GrokModelSession(fake.connection, 'pi-session-1', '/repo');
@@ -40,16 +59,18 @@ test('one Grok turn becomes two Pi assistant messages around a Pi tool call', as
   // Wait until Grok received the prompt, then play Grok: text, then a tools/call for Pi's read tool.
   await new Promise<void>((r) => { const i = setInterval(() => { if (fake.calls.some((c) => c.method === 'session/prompt')) { clearInterval(i); r(); } }, 5); });
   const h = fake.handlers();
-  assert.deepEqual(await h.onMcp({ method: 'tools/list', id: 1 }), { tools: [{ name: 'read', description: 'Read a file', inputSchema: JSON.parse(JSON.stringify(readTool.parameters)), annotations: { readOnlyHint: true }, _meta: { readOnlyHint: true } }] });
+  assert.deepEqual(await h.onMcp({ method: 'tools/list', id: 1 }), { tools: [{ name: 'pi_read', description: 'Read a file', inputSchema: structuredClone(readTool.parameters), annotations: { readOnlyHint: true }, _meta: { originalPiToolName: 'read', readOnlyHint: true } }] });
   h.onUpdate({ sessionId: 'g1', update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'Reading. ' } } } as any);
-  const toolResultPromise = h.onMcp({ method: 'tools/call', id: 2, params: { name: 'read', arguments: { path: 'token.txt' } } });
+  const toolResultPromise = h.onMcp({ method: 'tools/call', id: 2, params: { name: 'pi_read', arguments: { path: 'token.txt' } } });
   const events1 = await collect(s1);
   const done1 = events1.at(-1);
   assert.equal(done1.type, 'done'); assert.equal(done1.reason, 'toolUse');
   const toolCall = done1.message.content.find((c: any) => c.type === 'toolCall');
   assert.equal(toolCall.name, 'read'); assert.deepEqual(toolCall.arguments, { path: 'token.txt' });
   assert.equal(done1.message.content[0].text, 'Reading. ');
-  assert.equal(fake.calls.find((c) => c.method === 'session/new')!.params.rules, 'You are Pi.');
+  const rules = fake.calls.find((c) => c.method === 'session/new')!.params.rules;
+  assert.match(rules, /Grok Build running under Pi/);
+  assert.match(rules, /You are Pi\./);
   assert.equal(fake.calls.find((c) => c.method === 'session/new')!.params.offerPiTools, true);
   assert.match(fake.calls.find((c) => c.method === 'session/prompt')!.params.prompt[0].text, /read token\.txt/);
 
@@ -66,7 +87,7 @@ test('one Grok turn becomes two Pi assistant messages around a Pi tool call', as
   assert.equal(fake.calls.filter((c) => c.method === 'session/prompt').length, 1, 'tool results continue the same Grok turn');
 });
 
-test('default policy keeps Pi core tools out; Grok native tool activity is observed, not executed', async () => {
+test('default policy keeps Pi core tools out; Grok native tool updates are not duplicated as Pi calls', async () => {
   const fake = fakeConnection();
   const session = new GrokModelSession(fake.connection, 'pi-3', '/repo');
   const stream = createGrokStream(fake.connection, { current: () => session });
@@ -82,9 +103,7 @@ test('default policy keeps Pi core tools out; Grok native tool activity is obser
   const done = events.at(-1);
   assert.equal(done.reason, 'stop');
   assert.ok(!done.message.content.some((c: any) => c.type === 'toolCall'), 'native Grok tool never becomes a Pi tool call');
-  const thinking = done.message.content.find((c: any) => c.type === 'thinking');
-  assert.match(thinking.thinking, /\[grok read_file\] \{"path":"a.txt"\}/);
-  assert.match(thinking.thinking, /\[grok read_file completed\] hello/);
+  assert.ok(!done.message.content.some((c: any) => c.type === 'thinking'), 'native Grok tool updates stay out of assistant thinking; grok-tool entries render them');
   assert.equal(done.message.content.at(-1).text, 'done');
 });
 

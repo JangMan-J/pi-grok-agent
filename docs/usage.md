@@ -140,28 +140,34 @@ Pi can offer its own tools to Grok in addition to Grok's tools. `piTools` in `gr
 
 | Value | Tools offered to Grok |
 | --- | --- |
-| `extensions` (default) | Pi tools other than the core set and the shadow blacklist (below) |
+| `extensions` (default) | Pi tools other than the core set and the blocked extension/tool surfaces below |
 | `none` | No Pi tools |
-| `all` | Every Pi tool (ignores the blacklist) |
-| `a,b,c` | The named tools (ignores the blacklist) |
+| `all` | Every Pi tool (ignores blocked Pi extensions) |
+| `a,b,c` | The named tools (ignores blocked Pi extensions) |
 
 The core set Grok already has natively is always withheld under `extensions`: `read`, `bash`, `edit`, `write`, `grep`, `find`, `ls`.
 
-### Shadow blacklist
+### Blocked extension/tool surfaces
 
-Some Pi extension tools duplicate a Grok native tool under a different name, so Grok would route that work through the MCP loopback instead of using its own harness. The clearest case is pi-lens code navigation (`symbol_search`, `project_report`, `module_report`, `read_symbol`, `read_enclosing`, `lens_diagnostics`) versus Grok's native `read_file`, `grep`, `list_dir`, and LSP. Under `extensions` these are withheld on top of the core set. The package ships this blacklist as the default (`PI_SHADOW_TOOLS` in `src/config.ts`); `all` and a named allow-list ignore it.
+Some Pi extensions duplicate or disrupt Grok native harness behavior, so Grok would route work through the MCP loopback instead of using its own tools. Under `extensions`, blocked extensions or tool surfaces are withheld on top of the core set. Package defaults (`DEFAULT_BLOCKED_PI_EXTENSIONS` in `src/tool-policy.ts`) are:
 
-Edit the blacklist with `/grok tools`:
+- `pi-lens`: code-navigation tools such as `symbol_search`, `project_report`, `module_report`, `read_symbol`, `read_enclosing`, `lens_diagnostics`, and related lazy tools overlap Grok's native `read_file`, `grep`, `list_dir`, and LSP.
+- `codemode`: a meta-tool that can call other Pi tools and would bypass the curated lent-tool surface.
+- `image-generation`: `generate_image`, which overlaps Grok's native image and video tools.
+
+`all` and a named allow-list ignore blocked extensions.
+
+Edit blocked Pi extensions with `/grok extensions`:
 
 | Command | Effect |
 | --- | --- |
-| `/grok tools` or `/grok tools list` | Show the current blacklist: package defaults plus your additions. |
-| `/grok tools block <name>` | Withhold another Pi tool from Grok. |
-| `/grok tools unblock <name>` | Lend a blacklisted tool to Grok again (including a package default). |
+| `/grok extensions` or `/grok extensions list` | Show blocked Pi extensions: package defaults plus your additions and removed defaults. |
+| `/grok extensions block <name>` | Withhold all known tools from that Pi extension under `extensions`. |
+| `/grok extensions unblock <name>` | Lend a blocked extension's tools to Grok again under `extensions` (including a package default). |
 
-Edits persist to `piToolBlacklist` in `grok-ws.json` and take effect on the next Grok session (Grok reads the tool list once per session). A `piToolBlacklist` in the file is authoritative: it replaces the package defaults, so `/grok tools unblock` can drop a default and it stays dropped.
+Edits persist to `blockedPiExtensions` in `grok-ws.json` and take effect on the next Grok session (Grok reads the tool list once per session). A `blockedPiExtensions` list in the file is authoritative: it replaces the package defaults, so `/grok extensions unblock` can drop a default and it stays dropped. Runtime tool metadata from Pi is used when available, so `/grok extensions block <name>` can block a source or namespace even when this package has no static registry for it.
 
-Grok sees an offered tool as `pi__<name>`. When Grok calls it, the Pi assistant message ends with a tool call, Pi executes the tool through its own loop and permission gates, and the same Grok turn continues with the result. Pi passes the complete tool result to Grok.
+Grok sees an offered tool as `pi_<name>`, or `pi_<namespace>__<name>` when Pi exposes a namespace. The Pi assistant message still uses the original Pi tool name. Pi executes the tool through its own loop and permission gates, and the same Grok turn continues with the result. Pi passes the complete tool result to Grok.
 
 The gateway serves the lent tools as an HTTP MCP server at `http://127.0.0.1:2419/mcp/<token>`. It relays each MCP message to the Pi connection that registered the token. Grok connects to that server with its own MCP client, so the stock `grok` binary works.
 
@@ -194,7 +200,7 @@ Built-in post-edit checks:
 
 Precedence: `denyGrokTools`, then `allowGrokTools`, then the capability mirror, where a tool's `_meta` read-only marker and `mcpReadOnlyServers` apply to MCP tools. `/grok perms` changes the capabilities that the mirror uses, so `denyGrokTools` wins in every mode. In `ask` mode, an allowed edit or shell call then gets a Pi confirm dialog. Hook errors fail open, as Grok's own hooks do.
 
-Each Grok tool call becomes a `grok-tool` session entry with the tool, input, status, output (up to 8000 characters), and duration. The transcript shows one line for each call. The expanded view shows up to 600 characters of output. No model receives these entries.
+Each completed Grok tool call becomes a consolidated `grok-tool` session entry with the tool, input, status, output (up to 8000 characters), and duration. The transcript shows one line for each call. The expanded view shows up to 600 characters of output. Turn usage is not a separate entry: the provider puts it on the assistant message in Pi's convention (`input` excludes cached reads; `cacheRead` separate), where Pi and zentui's Turn summary and footer cache figure already show it. Setup, MCP readiness, model switches, and intermediate tool phases are silent. No model receives these entries.
 
 ## Gateway guard
 
@@ -234,7 +240,7 @@ Optional settings file: `~/.pi/agent/grok-ws.json`. If `PI_CODING_AGENT_DIR` is 
   "url": "ws://127.0.0.1:2419/ws",
   "secretFile": "~/.pi/agent/grok-ws.secret",
   "piTools": "extensions",
-  "piToolBlacklist": ["symbol_search", "module_report", "read_symbol"],
+  "blockedPiExtensions": ["pi-lens", "codemode", "image-generation"],
   "headlessPermissions": "dialog",
   "mediaDir": ".pi/grok-images",
   "grokMode": "default",
@@ -254,6 +260,8 @@ Optional settings file: `~/.pi/agent/grok-ws.json`. If `PI_CODING_AGENT_DIR` is 
 | `url` | Gateway WebSocket URL. A non-loopback URL must use `wss://`. The gateway itself accepts only a loopback `ws://` URL that ends in `/ws`. |
 | `secretFile` | Absolute path or a path that starts with `~/`. |
 | `autoStartGateway` | `true` (default) or `false`. See [Gateway auto-start](#gateway-auto-start). |
+| `piTools` | `extensions` (default), `none`, `all`, or a comma/list of exact Pi tool names. See [Lent Pi tools](#lent-pi-tools). |
+| `blockedPiExtensions` | Effective blocked extension/tool-surface list for `piTools: "extensions"`. If present, replaces the package defaults. |
 | `grokMode` | Grok's own permission mode: `default`, `auto`, or `yolo`. Sent each time Pi attaches a Grok session. Separate from `/grok perms`. See [Grok permission prompts](#grok-permission-prompts). |
 | `hooks.denyGrokTools`, `hooks.allowGrokTools` | Regular expressions that match the whole Grok tool name. |
 | `hooks.mcpReadOnlyServers` | MCP server names whose tools count as read-only. |

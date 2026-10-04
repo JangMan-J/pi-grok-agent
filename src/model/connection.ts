@@ -55,7 +55,7 @@ export class GrokModelConnection {
 
   /**
    * `secret` may be empty when the gateway has not created its file yet; `secretFile` is read again on each open.
-   * With `autoStart`, an open that finds nothing listening on a loopback `ws://` endpoint starts the bundled gateway.
+   * With `autoStart`, an open that finds nothing listening on a loopback non-TLS endpoint starts the bundled gateway.
    */
   constructor(options: ConnectionOptions & { secretFile?: string; autoStart?: { logDir: string } }) { this.options = { ...options }; }
 
@@ -63,7 +63,13 @@ export class GrokModelConnection {
   launchedGateway?: number;
 
   private async ensureGateway() {
-    if (!this.options.autoStart || !this.options.url.startsWith('ws://')) return;
+    let endpoint: URL;
+    try {
+      endpoint = new URL(this.options.url);
+    } catch {
+      return;
+    }
+    if (!this.options.autoStart || endpoint.protocol !== 'ws:') return;
     if (await endpointListening(this.options.url)) return;
     this.launchedGateway = await launchGateway(this.options.url, this.options.autoStart.logDir);
   }
@@ -185,8 +191,16 @@ export class GrokModelConnection {
     void this.connection?.agent.notify('pi/gate-ack', { key, ...state }).catch(() => {});
   }
 
-  /** HTTP origin of the gateway that fronts this WebSocket (ws://host:port -> http://host:port). */
-  get mcpBaseUrl() { return new URL(this.options.url).origin.replace(/^ws/, 'http'); }
+  /** HTTP origin of the gateway that fronts this WebSocket. */
+  get mcpBaseUrl() {
+    try {
+      const url = new URL(this.options.url);
+      url.protocol = url.protocol === 'wss:' ? 'https:' : 'http:';
+      return url.origin;
+    } catch (cause) {
+      throw new Error(`Invalid Grok gateway URL: ${this.options.url}`, { cause });
+    }
+  }
 
   /** Create or load a Grok session with Grok's native harness intact. `offerPiTools` adds the Pi-hosted MCP server. */
   async attachSession(input: { sessionId?: string; cwd: string; serverId: string; serverName: string; rules?: string; handlers: SessionHandlers; toolTimeoutMs?: number; offerPiTools: boolean; hooks?: boolean; grokMode?: 'default' | 'auto' | 'yolo' }) {

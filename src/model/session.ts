@@ -5,6 +5,7 @@
 import type { SessionNotification, PromptResponse, RequestPermissionRequest, RequestPermissionResponse } from '@agentclientprotocol/sdk';
 import type { Tool, ToolResultMessage } from '@earendil-works/pi-ai';
 import type { GrokModelConnection, McpToolDefinition, SdkCall } from './connection.ts';
+import { descriptionForPiTool, type PiToolAttribution, type PiToolRoute } from '../tool-policy.ts';
 import { capabilityGate, postEditContext, stopGate, classify, mcpServerOf, type GrokToolStamp, type HookRun, type HookReply } from './hooks.ts';
 import type { HookSettings } from '../config.ts';
 import { copyFileSync, existsSync, mkdirSync, writeFileSync } from 'node:fs';
@@ -52,7 +53,10 @@ export type GrokToolRecord = {
   sourcePath?: string;
 };
 
+/** Display-only activity entries for complete, low-frequency Grok state that is not otherwise shown. */
+
 type Parked = { resolve(result: unknown): void; reject(error: Error): void };
+type NativeCall = { title: string };
 
 export class GrokModelSession {
   grokSessionId?: string;
@@ -72,6 +76,10 @@ export class GrokModelSession {
   ask: (request: any) => Promise<Record<string, unknown>> = async () => ({ outcome: 'cancelled' });
   /** Pi tool names present in the Pi session; the pre_tool_use gate mirrors them onto Grok's harness. */
   piToolNames: string[] = [];
+  /** Runtime source/namespace metadata for Pi tools, when Pi exposes it before transcript serialization. */
+  piToolAttributions: readonly PiToolAttribution[] = [];
+  /** Grok-facing MCP names mapped back to original Pi tool names. */
+  piToolRoutes: PiToolRoute[] = [];
   hookSettings: HookSettings = {};
   /** Grok-side permission mode sent at session/new. */
   grokMode: 'default' | 'auto' | 'yolo' = 'default';
@@ -91,7 +99,8 @@ export class GrokModelSession {
   readonly hookLog: { event: string; tool?: string; decision?: string; reason?: string; context?: string }[] = [];
   /** Receives one structured record per Grok-native tool call (from the hook pairs). */
   onToolRecord?: (record: GrokToolRecord) => void;
-  private readonly nativeCalls = new Map<string, string>(); // toolCallId -> title
+  /** Receives visible, display-only Grok activity records. */
+  private readonly nativeCalls = new Map<string, NativeCall>(); // toolCallId -> active call
   /** `_meta["x.ai/tool"]` from each tool_call update, keyed by toolCallId; the gate classifies by it. */
   private readonly stamps = new Map<string, GrokToolStamp>();
   /** Per-tool `_meta` from `_x.ai/mcp/list`, keyed by qualified `server__tool`. Fetched once per session on first need. */
@@ -338,22 +347,19 @@ export class GrokModelSession {
         // A Grok-native tool starting on the Grok harness. Pi observes; it does not execute.
         const title = String(update.title ?? update.kind ?? 'tool');
         if (/^(pi__|mcp__pi__)/.test(title)) return; // Pi-hosted calls surface through sdk_call instead
-        this.nativeCalls.set(String(update.toolCallId), title);
+        const toolUseId = String(update.toolCallId);
+        this.nativeCalls.set(toolUseId, { title });
         const stamp = update._meta?.['x.ai/tool'];
-        if (stamp && typeof stamp === 'object') this.stamps.set(String(update.toolCallId), stamp as GrokToolStamp);
-        const input = update.rawInput ? ' ' + compact(update.rawInput) : '';
-        this.emit({ kind: 'thought', delta: `\n[grok ${title}]${input}\n` });
+        if (stamp && typeof stamp === 'object') this.stamps.set(toolUseId, stamp as GrokToolStamp);
         return;
       }
       case 'tool_call_update': {
         const id = String(update.toolCallId);
-        const title = this.nativeCalls.get(id);
-        if (!title) return;
+        const call = this.nativeCalls.get(id);
+        if (!call && !update.title && !update.status) return;
         if (update.status === 'completed' || update.status === 'failed') {
           this.nativeCalls.delete(id);
           this.stamps.delete(id);
-          const out = Array.isArray(update.content) ? update.content.map((c: any) => c?.content?.text ?? '').join('') : '';
-          this.emit({ kind: 'thought', delta: `[grok ${title} ${update.status}]${out ? ' ' + compact(out) : ''}\n` });
         }
         return;
       }
@@ -395,7 +401,8 @@ export class GrokModelSession {
         }
         case 'post_tool_use_failure': {
           const tool = payload.toolName ?? '';
-          this.onToolRecord?.({ toolUseId: payload.toolUseId ?? '', tool, input: payload.toolInput, status: 'failed', output: resultText(payload.toolResult ?? (payload as any).error), durationMs: payload.durationMs });
+          const output = resultText(payload.toolResult ?? (payload as any).error);
+          this.onToolRecord?.({ toolUseId: payload.toolUseId ?? '', tool, input: payload.toolInput, status: 'failed', output, durationMs: payload.durationMs });
           return { decision: 'continue' };
         }
         case 'stop': {
@@ -407,7 +414,8 @@ export class GrokModelSession {
           return { decision: 'continue' };
       }
     } catch (error) {
-      this.hookLog.push({ event: payload.hookEventName, decision: 'continue', reason: `hook error: ${error instanceof Error ? error.message : String(error)}` });
+      const reason = `hook error: ${error instanceof Error ? error.message : String(error)}`;
+      this.hookLog.push({ event: payload.hookEventName, decision: 'continue', reason });
       return { decision: 'continue' }; // fail open, like Grok's own hooks
     }
   }
@@ -437,11 +445,13 @@ export class GrokModelSession {
       case 'initialize':
         return Promise.resolve({ protocolVersion: message.params?.protocolVersion ?? '2025-06-18', capabilities: { tools: {} }, serverInfo: { name: 'pi', version: '0.1.0' } });
       case 'tools/list':
-        return Promise.resolve({ tools: this.tools.map(toMcpTool) });
+        return Promise.resolve({ tools: this.tools.map((tool) => toMcpTool(tool, this.piToolRoutes.find((route) => route.originalName === tool.name))) });
       case 'tools/call': {
-        const name = String(message.params?.name ?? '');
+        const exposedName = String(message.params?.name ?? '');
+        const route = this.piToolRoutes.find((candidate) => candidate.exposedName === exposedName) ?? this.piToolRoutes.find((candidate) => candidate.originalName === exposedName);
+        const name = route?.originalName ?? exposedName;
         const args = (message.params?.arguments ?? {}) as Record<string, unknown>;
-        if (!this.tools.some((t) => t.name === name)) return Promise.reject(new Error(`Unknown Pi tool ${name}`));
+        if (!this.tools.some((t) => t.name === name)) return Promise.reject(new Error(`Unknown Pi tool ${exposedName}`));
         const toolCallId = `grok_${this.serverId}_${++this.toolSeq}`;
         return new Promise((resolve, reject) => {
           this.parked.set(toolCallId, { resolve, reject });
@@ -476,20 +486,18 @@ export function resultText(value: unknown, limit = 8000): string | undefined {
   return JSON.stringify(value).slice(0, limit);
 }
 
-function compact(value: unknown, limit = 400): string {
-  const text = typeof value === 'string' ? value : JSON.stringify(value);
-  return text.length > limit ? text.slice(0, limit) + '…' : text;
-}
-
 const PI_READ_ONLY_TOOLS = new Set(['read', 'grep', 'find', 'ls', 'symbol_search', 'module_report', 'read_symbol', 'read_enclosing', 'lens_diagnostics', 'project_report', 'effective_config']);
 
 /**
  * Pi tool -> MCP tool definition. Read-only Pi tools carry the marker in `_meta` (Grok forwards `_meta`, not
  * `annotations`), so a read-only Pi session can still let Grok call them. `annotations` is sent too for clients that keep it.
  */
-export function toMcpTool(tool: Tool): McpToolDefinition & { annotations?: Record<string, unknown>; _meta?: Record<string, unknown> } {
-  const readOnly = PI_READ_ONLY_TOOLS.has(tool.name) || (tool as { readOnly?: boolean }).readOnly === true;
-  const def: McpToolDefinition & { annotations?: Record<string, unknown>; _meta?: Record<string, unknown> } = { name: tool.name, description: tool.description, inputSchema: JSON.parse(JSON.stringify(tool.parameters)) };
-  if (readOnly) { def.annotations = { readOnlyHint: true }; def._meta = { readOnlyHint: true }; }
+export function toMcpTool(tool: Tool, route?: PiToolRoute): McpToolDefinition & { annotations?: Record<string, unknown>; _meta?: Record<string, unknown> } {
+  const readOnly = PI_READ_ONLY_TOOLS.has(tool.name) || (tool as { readOnly?: boolean }).readOnly === true || route?.attribution?.readOnlyHint === true;
+  const meta: Record<string, unknown> = { originalPiToolName: tool.name };
+  const inputSchema = structuredClone(tool.parameters) as Record<string, unknown>;
+  const def: McpToolDefinition & { annotations?: Record<string, unknown>; _meta?: Record<string, unknown> } = { name: route?.exposedName ?? tool.name, description: descriptionForPiTool(tool), inputSchema };
+  if (readOnly) { def.annotations = { readOnlyHint: true }; meta.readOnlyHint = true; }
+  def._meta = meta;
   return def;
 }

@@ -6,7 +6,7 @@ import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { extname, join } from 'node:path';
-import { agentDir, readConfig, writeConfig, PI_SHADOW_TOOLS } from './config.ts';
+import { agentDir, readConfig } from './config.ts';
 import { grokLogin } from './login.ts';
 import { permissionAnswer, permissionDialog } from './model/permissions.ts';
 import { questionAnswerer } from './model/questions.ts';
@@ -14,6 +14,8 @@ import { GrokModelConnection } from './model/connection.ts';
 import { GrokModelSession, type GrokToolRecord } from './model/session.ts';
 import { createGrokStream, GROK_API, MODEL_IDS } from './model/provider.ts';
 import { createSteerHandler } from './model/steer.ts';
+import { handleExtensionsCommand } from './model/extensions-command.ts';
+import { blockedToolNamesForExtensions, sortedNames, toolNamesForExtension, type PiToolAttribution } from './tool-policy.ts';
 
 type SavedModelSession = { owner: string; grokSessionId: string; serverId: string; cwd: string };
 const ENTRY = 'grok-model-session';
@@ -69,12 +71,11 @@ function oneLine(value: unknown, limit: number): string {
   const flat = text.replace(/\s+/g, ' ').trim();
   return flat.length > limit ? flat.slice(0, limit) + '\u2026' : flat;
 }
-
 export default async function grokModel(pi: ExtensionAPI) {
   const config = await readConfig();
-  // Live shadow blacklist: `/grok tools` mutates this Set in place and persists it, so the next Grok
-  // session lends the updated set without a Pi reload. (Grok reads the tool list once per session.)
-  const toolBlacklist = new Set(config.piToolBlacklist);
+  // Live blocked Pi extension set: `/grok extensions` mutates this Set in place and persists it, so the
+  // next Grok session lends the updated set without a Pi reload. (Grok reads the tool list once per session.)
+  const blockedPiExtensions = new Set(config.blockedPiExtensions);
   const connection = new GrokModelConnection({ url: config.url, secret: config.secret, secretFile: config.secretFile, autoStart: config.autoStartGateway ? { logDir: agentDir } : undefined });
   let current: GrokModelSession | undefined;
   let permissionMode: 'yolo' | 'auto' | 'ask' | 'readonly' = 'auto';
@@ -127,7 +128,16 @@ export default async function grokModel(pi: ExtensionAPI) {
     return permissionAnswer(ctx.hasUI, permissionDialog(ctx), config.headlessPermissions, mode);
   }
 
-  const stream = createGrokStream(connection, { current: () => current, piTools: config.piTools, piToolBlacklist: toolBlacklist });
+  function getPiToolAttributions(): PiToolAttribution[] {
+    return pi.getAllTools().map((tool) => ({
+      name: tool.name,
+      namespaceName: tool.namespace?.name,
+      sourceInfo: tool.sourceInfo,
+      readOnlyHint: tool.annotations?.readOnlyHint,
+    }));
+  }
+
+  const stream = createGrokStream(connection, { current: () => current, piTools: config.piTools, blockedPiExtensions, getPiToolAttributions });
 
   const contextWindows = grokContextWindows();
   const contextWindowFor = (id: string | undefined) => (id && contextWindows[id]) || DEFAULT_CONTEXT_WINDOW;
@@ -224,6 +234,12 @@ export default async function grokModel(pi: ExtensionAPI) {
     return box;
   });
 
+  // Turn usage is not rendered as its own entry: it duplicated what Pi (and
+  // zentui's Turn summary / footer cache figure) already show from the usage
+  // the provider puts on the assistant message, and Grok's own accounting
+  // counts cached tokens inside inputTokens, so the two lines disagreed.
+  // usageFrom() in provider.ts maps Grok usage to Pi's convention.
+
   // Manual access to Grok harness features that are otherwise model-driven. Prompts go straight to Grok, outside Pi's loop.
   // Only what Pi has no native surface for. Escape cancels, /new starts fresh, reconnect is automatic,
   // and Pi's thinking level sets Grok's reasoning effort, so those are not commands here.
@@ -235,11 +251,11 @@ export default async function grokModel(pi: ExtensionAPI) {
     plan: { description: '(on | off)', args: [{ value: 'on', description: 'enter plan mode' }, { value: 'off', description: 'leave plan mode' }] },
     goal: { description: '(<objective> | status | pause | resume | clear)', args: [{ value: 'status', description: 'current goal' }, { value: 'pause', description: '' }, { value: 'resume', description: '' }, { value: 'clear', description: '' }] },
     compact: { description: '(note)', args: [] },
-    tools: { description: '(list | block <name> | unblock <name>)', args: [{ value: 'list', description: 'show the shadow blacklist' }, { value: 'block', description: 'withhold a Pi tool from Grok' }, { value: 'unblock', description: 'lend a Pi tool to Grok again' }] },
+    extensions: { description: '(list | block <name> | unblock <name>)', args: [{ value: 'list', description: 'show blocked Pi extensions' }, { value: 'block', description: 'withhold a Pi extension from Grok' }, { value: 'unblock', description: 'lend a Pi extension to Grok again' }] },
     debug: { description: '(brilliant information)', args: [] },
   };
   pi.registerCommand('grok', {
-    description: 'login | perms | plan | goal | compact | tools | debug',
+    description: 'login | perms | plan | goal | compact | extensions | debug',
     getArgumentCompletions: (prefix) => {
       const [head, ...rest] = prefix.split(/\s+/);
       if (rest.length === 0) {
@@ -274,14 +290,18 @@ export default async function grokModel(pi: ExtensionAPI) {
         switch (verb) {
           case 'debug': {
             const u = session.usageTotals; const denied = session.hookLog.filter((h) => h.decision === 'deny').length;
+            const piToolAttributions = getPiToolAttributions();
+            const blockedPiToolNames = blockedToolNamesForExtensions(blockedPiExtensions, piToolAttributions);
+            const withheldPiTools = sortedNames(session.piToolNames.filter((toolName) => blockedPiToolNames.has(toolName)));
             show('Grok debug', [
               `gateway: ${config.url} (${connection.isOpen ? 'connected' : 'not connected'}${connection.launchedGateway ? `, started by this Pi as pid ${connection.launchedGateway}` : ''}${connection.lastDrop ? `, last drop: ${connection.lastDrop}` : ''}; auto-start ${config.autoStartGateway ? 'on' : 'off'})`,
               `grok session: ${session.grokSessionId ?? '(none yet; first message creates it)'}`,
               `mode: ${session.mode}${session.promptActive ? ' (turn running)' : ''}; pi perms: ${session.permissionMode}; grok mode: ${session.grokMode}`,
               `grok context: ${session.lastContextTokens != null ? `${session.lastContextTokens.toLocaleString()} / ${contextWindowFor(session.grokModel).toLocaleString()}` : 'unknown'}`,
               `usage: ${u.turns} turns, ${u.inputTokens.toLocaleString()} in (${u.cachedReadTokens.toLocaleString()} cached), ${u.outputTokens.toLocaleString()} out, $${u.costUsd.toFixed(3)}`,
-              `lent Pi tools: ${session.tools.length ? session.tools.map((t) => t.name).join(', ') : 'none'}`,
-              `withheld (blacklist): ${toolBlacklist.size ? [...toolBlacklist].sort().join(', ') : 'none'}`,
+              `lent Pi tools: ${session.piToolRoutes.length ? session.piToolRoutes.map((route) => `${route.exposedName} → ${route.originalName}`).join(', ') : 'none'}`,
+              `blocked Pi extensions: ${blockedPiExtensions.size ? sortedNames(blockedPiExtensions).join(', ') : 'none'}`,
+              `withheld Pi extension tools: ${withheldPiTools.join(', ') || 'none'}`,
               `hook decisions: ${session.hookLog.length} (${denied} denied); pending lent-tool calls: ${session.pendingToolCallIds.length}`,
             ].join('\n'));
             return;
@@ -296,28 +316,9 @@ export default async function grokModel(pi: ExtensionAPI) {
           case 'plan': { const mode = tail === 'off' ? 'default' : 'plan'; if (tail && !['on', 'off'].includes(tail)) throw new Error('Usage: /grok plan on | off'); await session.setMode(mode); ctx.ui.notify(`Grok session mode: ${mode}`, 'info'); return; }
           case 'goal': { const r = await session.runCommand(`/goal${tail ? ' ' + tail : ''}`, 600_000); show(`/goal${tail ? ' ' + tail : ''}`, r.text); return; }
           case 'compact': { const r = await session.runCommand(`/compact${tail ? ' ' + tail : ''}`, 600_000); show('/compact', r.text || `done (${r.stopReason})`); return; }
-          case 'tools': {
-            const [action, name] = [rest[0], rest.slice(1).join(' ').trim()];
-            if (!action || action === 'list') {
-              const entries = [...toolBlacklist].sort();
-              const builtIn = entries.filter((t) => PI_SHADOW_TOOLS.has(t));
-              const added = entries.filter((t) => !PI_SHADOW_TOOLS.has(t));
-              show('Grok tool blacklist', [
-                `Policy applies to piTools: extensions (current: ${Array.isArray(config.piTools) ? config.piTools.join(', ') : config.piTools}).`,
-                `Withheld (${entries.length}): ${entries.length ? entries.join(', ') : 'none'}`,
-                added.length ? `  added by you: ${added.join(', ')}` : '',
-                `  package defaults: ${builtIn.join(', ') || 'none'}`,
-                'Takes effect on the next Grok session.',
-              ].filter(Boolean).join('\n'));
-              return;
-            }
-            if (action !== 'block' && action !== 'unblock') throw new Error('Usage: /grok tools list | block <name> | unblock <name>');
-            if (!name) throw new Error(`Usage: /grok tools ${action} <name>`);
-            if (action === 'block') toolBlacklist.add(name); else toolBlacklist.delete(name);
-            await writeConfig({ piToolBlacklist: [...toolBlacklist].sort() });
-            ctx.ui.notify(`Grok tool blacklist: ${action === 'block' ? 'blocked' : 'unblocked'} ${name} (applies to the next Grok session).`, 'info');
+          case 'extensions':
+            await handleExtensionsCommand({ args: rest, blockedPiExtensions, piTools: config.piTools, getToolNamesForExtension: (name) => toolNamesForExtension(name, getPiToolAttributions()), show, notify: (message) => ctx.ui.notify(message, 'info') });
             return;
-          }
           default: ctx.ui.notify(`Unknown /grok subcommand "${verb}".`, 'info');
         }
       } catch (error) { ctx.ui.notify(`Grok: ${error instanceof Error ? error.message : String(error)}`, 'error'); }
