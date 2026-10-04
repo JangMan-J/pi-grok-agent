@@ -1,12 +1,10 @@
 import { readFile, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
-import { isAbsolute, join } from 'node:path';
-import { validateEndpoint } from './client.ts';
+import { join } from 'node:path';
 import { DEFAULT_BLOCKED_PI_EXTENSIONS, type PiToolPolicy } from './tool-policy.ts';
 
 export const agentDir = process.env.PI_CODING_AGENT_DIR || join(homedir(), '.pi', 'agent');
 export const configPath = join(agentDir, 'grok-ws.json');
-export const defaultSecretFile = join(agentDir, 'grok-ws.secret');
 
 /**
  * How the `grok` model provider answers Grok's native permission prompts when Pi has no UI (`-p`, Fabric workers).
@@ -32,7 +30,7 @@ export function parsePermissionMode(value: unknown): PiPermissionMode {
   throw new Error(`permissionMode must be yolo, auto, ask, or readonly (got ${JSON.stringify(value)}).`);
 }
 
-/** Default `toolBatchSize`. Kept here, not in tool-batch.ts, so the gateway build does not pull in the session graph. */
+/** Default routine native tool batch size. */
 export const TOOL_BATCH_SIZE = 10;
 
 /** Validated `toolBatchSize` from `grok-ws.json`: routine native tool completions per `grok-tools` batch row. */
@@ -41,13 +39,9 @@ export function parseToolBatchSize(value: unknown): number {
   throw new Error(`toolBatchSize must be a positive integer (got ${JSON.stringify(value)}).`);
 }
 
-/**
- * Gateway guard tiers, in milliseconds. Grok fails OPEN when a client hook times out and waits forever on a
- * permission prompt, so the gateway answers on Pi's behalf when Pi cannot. Each value is a deadline after which
- * the gateway answers fail-closed (deny / continue / reject) unless Pi has answered.
- */
+/** Legacy guard settings remain validated for config compatibility, but stdio-direct does not arm timers. */
 export type GuardSettings = {
-  /** No `pi/gate-ack` from Pi within this window: Pi is hung or gone. Default 5000. */
+  /** Legacy acknowledgement window. Default 5000. */
   ackMs?: number;
   /** Acked without dialog or check: a policy answer is expected promptly. Default 15000. */
   policyMs?: number;
@@ -95,23 +89,10 @@ export type HookSettings = {
   stopCheck?: string;
 };
 
-/** The gateway's shared secret, or undefined when the file does not exist yet. Other read errors propagate. */
-export async function readSecretFile(secretFile: string): Promise<string | undefined> {
-  try { return (await readFile(secretFile, 'utf8')).trim(); }
-  catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined; throw error; }
-}
-
 export async function readConfig() {
-  let settings: { url?: string; secretFile?: string; piTools?: PiToolPolicy; blockedPiExtensions?: string[]; permissionMode?: PiPermissionMode; toolBatchSize?: number; hooks?: HookSettings; headlessPermissions?: HeadlessPermissionPolicy; guard?: GuardSettings; mediaDir?: string; grokMode?: GrokMode; autoStartGateway?: boolean } = {};
+  let settings: { piTools?: PiToolPolicy; blockedPiExtensions?: string[]; permissionMode?: PiPermissionMode; toolBatchSize?: number; hooks?: HookSettings; headlessPermissions?: HeadlessPermissionPolicy; guard?: GuardSettings; mediaDir?: string; grokMode?: GrokMode } = {};
   try { settings = JSON.parse(await readFile(configPath, 'utf8')); }
   catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error; }
-  const url = validateEndpoint(process.env.GROK_ACP_URL || settings.url || 'ws://127.0.0.1:2419/ws');
-  const configuredFile = settings.secretFile || defaultSecretFile;
-  const secretFile = configuredFile.startsWith('~/') ? join(homedir(), configuredFile.slice(2)) : configuredFile;
-  if (!isAbsolute(secretFile)) throw new Error('grok-ws secretFile must be absolute or start with ~/.');
-  // A missing secret file is not a load error: Pi exits on any extension load failure, and the gateway that creates
-  // the file may not have run yet. The connection reads the file again when it opens (`readSecretFile`).
-  const secret = process.env.GROK_AGENT_SECRET || (await readSecretFile(secretFile)) || '';
   const piTools: PiToolPolicy = process.env.PI_GROK_PI_TOOLS ? parsePolicy(process.env.PI_GROK_PI_TOOLS) : settings.piTools ?? 'extensions';
   // Effective blocked Pi extensions: the stored list is authoritative when present (the `/grok extensions`
   // command seeds it from DEFAULT_BLOCKED_PI_EXTENSIONS on first edit); otherwise the package default applies.
@@ -129,9 +110,7 @@ export async function readConfig() {
   const mediaDir = process.env.PI_GROK_MEDIA_DIR ?? settings.mediaDir ?? '.pi/grok-images';
   const grokMode = (process.env.PI_GROK_GROK_MODE as GrokMode | undefined) ?? settings.grokMode ?? 'default';
   if (!['default', 'auto', 'yolo'].includes(grokMode)) throw new Error(`grokMode must be default, auto, or yolo (got ${grokMode}).`);
-  // Start the bundled gateway when nothing listens on the endpoint. PI_GROK_AUTOSTART=0 or autoStartGateway: false turns it off.
-  const autoStartGateway = process.env.PI_GROK_AUTOSTART ? !['0', 'false', 'no', 'off'].includes(process.env.PI_GROK_AUTOSTART.toLowerCase()) : settings.autoStartGateway ?? true;
-  return { url, secret, secretFile, piTools, blockedPiExtensions, permissionMode, toolBatchSize, hooks, headlessPermissions, guard, mediaDir, grokMode, autoStartGateway };
+  return { piTools, blockedPiExtensions, permissionMode, toolBatchSize, hooks, headlessPermissions, guard, mediaDir, grokMode };
 }
 
 /**

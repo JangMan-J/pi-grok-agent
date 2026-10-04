@@ -1,12 +1,13 @@
-// One WebSocket to Grok, many sessions. Grok keeps its full native harness (its own tools,
-// permissions, subagents). Pi tools are offered additively as an HTTP MCP server that the gateway
-// fronts at /mcp/<serverId>; the gateway relays each MCP message back over this socket as an
-// _x.ai/mcp/sdk_call request, routed here by serverId. The stock leader never sees that traffic.
-import { client, type ClientConnection, type InitializeResponse, type NewSessionResponse, type LoadSessionResponse, type SessionNotification, type RequestPermissionRequest, type RequestPermissionResponse } from '@agentclientprotocol/sdk';
-import { openSocket, type ConnectionOptions } from '../client.ts';
-import { readSecretFile } from '../config.ts';
-import { endpointListening, launchGateway } from '../launch.ts';
+// One stdio agent per Pi process; sessions and HTTP MCP routes share that child.
+import { client, ndJsonStream, type AnyMessage, type ClientConnection, type InitializeResponse, type NewSessionResponse, type LoadSessionResponse, type SessionNotification, type RequestPermissionRequest, type RequestPermissionResponse } from '@agentclientprotocol/sdk';
+import { spawn, type ChildProcessByStdio } from 'node:child_process';
+import { Readable, Writable } from 'node:stream';
 import { GATE_REGISTRATION_MS } from '../config.ts';
+import { ReverseRequestGuard } from './guard.ts';
+import { startMcpServer } from './mcp-server.ts';
+
+export type ConnectionOptions = { binary?: string; env?: NodeJS.ProcessEnv };
+type AgentChild = ChildProcessByStdio<Writable, Readable, null>;
 
 export type McpToolDefinition = { name: string; description: string; inputSchema: Record<string, unknown> };
 export type McpToolResult = { content: { type: 'text'; text: string }[] | { type: 'image'; data: string; mimeType: string }[] | ({ type: 'text'; text: string } | { type: 'image'; data: string; mimeType: string })[]; isError?: boolean };
@@ -17,10 +18,7 @@ export interface SessionHandlers {
   /** Answer one MCP JSON-RPC message from Grok. Return the JSON-RPC `result` or throw for an error. */
   onMcp(message: SdkCall): Promise<unknown>;
   onPermission?(request: RequestPermissionRequest): Promise<RequestPermissionResponse>;
-  /**
-   * Blocking client hook (`_x.ai/hooks/run`): pre_tool_use, post_tool_use, stop. `gate.dialog()` tells the gateway a
-   * human is deciding, so it waits the dialog window instead of the short policy window before answering for Pi.
-   */
+  /** Blocking client hook. `gate.dialog()` is retained as a no-op for session handlers. */
   onHookRun?(payload: any, gate?: { dialog(): void }): Promise<Record<string, unknown>>;
   /** Passive client hook notification (`_x.ai/hooks/event`). */
   onHookEvent?(payload: any): void;
@@ -30,10 +28,7 @@ export interface SessionHandlers {
   onSessionExt?(update: any): void;
 }
 
-/**
- * Client hook registration sent in session/new. Grok caps timeouts at 600 s and fails OPEN on expiry.
- * The gate gets a short deadline; the gateway denies on Pi's behalf well before it (PI_GROK_GATE_DENY_MS).
- */
+/** Grok caps hook deadlines at 600 s and fails OPEN on expiry; there are no in-process deadlines. */
 export const CLIENT_HOOKS = {
   PreToolUse: [{ hookCallbackIds: ['pi-pre'], timeout: GATE_REGISTRATION_MS / 1000 }],
   PostToolUse: [{ hookCallbackIds: ['pi-post'], timeout: 600 }],
@@ -41,10 +36,12 @@ export const CLIENT_HOOKS = {
   Stop: [{ hookCallbackIds: ['pi-stop'], timeout: 600 }],
 };
 
-type SdkCallParams = { serverId: string; sessionId?: string; message: SdkCall };
-
 export class GrokModelConnection {
-  private socket?: Awaited<ReturnType<typeof openSocket>>;
+  private child?: AgentChild;
+  private guard?: ReverseRequestGuard;
+  private stopping = new Set<Promise<void>>();
+  private mcpServer?: Awaited<ReturnType<typeof startMcpServer>>;
+  private mcpStarting?: ReturnType<typeof startMcpServer>;
   private connection?: ClientConnection;
   private initialized?: InitializeResponse;
   private readonly sessions = new Map<string, SessionHandlers>();
@@ -53,48 +50,23 @@ export class GrokModelConnection {
   private readonly servers = new Map<string, SessionHandlers>();
   private opening?: Promise<void>;
   private closed = false;
-  private readonly options: ConnectionOptions & { secretFile?: string; autoStart?: { logDir: string } };
+  private readonly options: ConnectionOptions;
+  constructor(options: ConnectionOptions = {}) { this.options = { ...options }; }
 
-  /**
-   * `secret` may be empty when the gateway has not created its file yet; `secretFile` is read again on each open.
-   * With `autoStart`, an open that finds nothing listening on a loopback non-TLS endpoint starts the bundled gateway.
-   */
-  constructor(options: ConnectionOptions & { secretFile?: string; autoStart?: { logDir: string } }) { this.options = { ...options }; }
-
-  /** Pid of the gateway this connection started, if any. */
-  launchedGateway?: number;
-
-  private async ensureGateway() {
-    let endpoint: URL;
-    try {
-      endpoint = new URL(this.options.url);
-    } catch {
-      return;
-    }
-    if (!this.options.autoStart || endpoint.protocol !== 'ws:') return;
-    if (await endpointListening(this.options.url)) return;
-    this.launchedGateway = await launchGateway(this.options.url, this.options.autoStart.logDir);
-  }
-
-  /** Fill in the secret from its file on first open, so Pi loads and the gateway may start after it. */
-  private async resolveSecret() {
-    if (this.options.secret.trim() || !this.options.secretFile) return;
-    const secret = await readSecretFile(this.options.secretFile);
-    if (!secret) throw new Error(`Grok gateway secret not found at ${this.options.secretFile}. Start the gateway once (pi-grok-gateway, or npm run server in the clone); it creates the file. Then send the message again.`);
-    this.options.secret = secret;
-  }
+  get binary() { return this.options.binary ?? process.env.PI_GROK_BINARY ?? 'grok'; }
 
   /** Reasons the last connection ended, for status and error text. */
   lastDrop?: string;
 
   get isOpen() { return !!this.connection && !this.closed; }
 
-  /** The socket went away underneath us (gateway restart, network). Sessions stay in the map so attach() can session/load them. */
+  /** The child went away. Sessions stay in the map so attach() can session/load them. */
   private markDropped(reason: string) {
-    if (!this.connection && !this.socket) return;
+    if (!this.connection && !this.child) return;
     this.lastDrop = reason;
     this.connection = undefined;
-    this.socket = undefined;
+    this.child = undefined;
+    this.guard = undefined;
     this.initialized = undefined;
     this.generation++;
   }
@@ -103,73 +75,91 @@ export class GrokModelConnection {
   generation = 0;
 
   async open(signal?: AbortSignal) {
-    if (this.connection) return;
     if (this.opening) return this.opening;
+    if (this.connection) return;
     this.closed = false;
+    signal?.throwIfAborted();
     this.opening = (async () => {
-      await this.ensureGateway();
-      await this.resolveSecret();
-      const socket = await openSocket(this.options, signal);
-      this.socket = socket;
-      void socket.closed.then(() => { if (this.socket === socket) this.markDropped('Grok WebSocket closed'); });
-      this.connection = client({ name: 'pi-grok-model' })
-        .onNotification('session/update', ({ params }) => {
-          this.sessions.get(params.sessionId)?.onUpdate(params);
-        })
-        .onRequest('session/request_permission', async ({ params }) => {
-          const handler = this.sessions.get(params.sessionId)?.onPermission;
-          this.ack(`perm:${params.toolCall?.toolCallId ?? ''}`, { dialog: this.hasUI });
-          return handler ? handler(params) : { outcome: { outcome: 'cancelled' } };
-        })
-        .onRequest('_x.ai/ask_user_question', (raw) => raw as any, async ({ params }) => {
-          const handler = this.sessions.get(params.sessionId ?? params.session_id)?.onQuestion;
-          this.ack(`ask:${params.toolCallId ?? params.tool_call_id ?? ''}`, { dialog: this.hasUI });
-          return handler ? handler(params) : { outcome: 'cancelled' };
-        })
-        .onRequest('_x.ai/hooks/run', (raw) => raw as any, async ({ params }) => {
-          const handler = this.sessions.get(params.sessionId ?? params.session_id)?.onHookRun;
-          const event = String(params.hookEventName ?? '');
-          const key = event === 'stop' ? `stop:${params.sessionId ?? params.session_id ?? ''}` : `${event}:${params.toolUseId ?? ''}`;
-          this.ack(key, { check: event === 'post_tool_use' || event === 'stop' });
-          if (handler) return handler(params, { dialog: () => this.ack(key, { dialog: true }) });
-          // No Pi session owns this Grok session (detached by /new or shutdown while a turn was still running).
-          // Pi's capability gate is gone, so tool use is denied rather than left to Grok's own permission mode.
-          if (event === 'pre_tool_use') return { decision: 'deny', reason: 'Pi detached from this Grok session; tool use is denied until a Pi session owns it again.' };
-          return { decision: 'continue' };
-        })
-        .onNotification('_x.ai/session_notification', (raw) => raw as any, ({ params }) => {
-          this.sessions.get(params.sessionId ?? params.session_id)?.onSessionExt?.(params.update);
-        })
-        .onNotification('_x.ai/hooks/event', (raw) => raw as any, ({ params }) => {
-          this.sessions.get(params.sessionId ?? params.session_id)?.onHookEvent?.(params);
-        })
-        .onRequest('_x.ai/mcp/sdk_call', (raw) => raw as SdkCallParams, async ({ params }) => {
-          const handlers = this.servers.get(params.serverId) ?? (params.sessionId ? this.sessions.get(params.sessionId) : undefined);
-          const { message } = params;
-          if (!handlers) return { jsonrpc: '2.0', id: message.id, error: { code: -32001, message: `no session for server ${params.serverId}` } };
-          try {
-            const result = await handlers.onMcp(message);
-            return { jsonrpc: '2.0', id: message.id, result };
-          } catch (error) {
-            return { jsonrpc: '2.0', id: message.id, error: { code: -32603, message: error instanceof Error ? error.message : String(error) } };
-          }
-        })
-        .connect(socket.stream);
-      const agent = this.connection.agent;
-      this.initialized = await agent.request('initialize', {
-        protocolVersion: 1,
-        clientInfo: { name: 'pi-grok-model', version: '0.1.0' },
-        clientCapabilities: { fs: { readTextFile: false, writeTextFile: false }, terminal: false },
-        _meta: { 'x.ai/mcp/sdk': true },
+      const binary = this.binary;
+      const child = spawn(binary, ['--permission-mode', 'default', 'agent', '--no-leader', 'stdio'], {
+        stdio: ['pipe', 'pipe', 'inherit'],
+        // Grok Build 1.0.46 user guide, 14-headless-mode.md: SDKs inject this for non-leader agents they spawn.
+        env: { ...process.env, ...this.options.env, GROK_DISABLE_AUTOUPDATER: '1' },
       });
-      if ((this.initialized.authMethods ?? []).some((m) => m.id === 'cached_token')) {
-        await agent.request('authenticate', { methodId: 'cached_token' });
-      } else {
-        // Grok offers `cached_token` only with a stored login. Drop this connection so the turn after a login
-        // initializes again and sees the new credential.
-        this.socket?.close();
-        this.markDropped('Grok Build is not signed in');
-        throw new Error('Grok Build is not signed in. Run /grok login, approve the code in your browser, then send the message again.');
+      this.child = child;
+      const guard = new ReverseRequestGuard((message) => {
+        if (child.stdin.writable && !child.stdin.destroyed) child.stdin.write(JSON.stringify(message) + '\n');
+      });
+      this.guard = guard;
+      let rejectEnded!: (error: Error) => void;
+      const ended = new Promise<never>((_, reject) => { rejectEnded = reject; });
+      const fail = (why: string) => {
+        rejectEnded(new Error(`Grok stdio child ${binary}: ${why}`));
+        if (this.child === child) this.drop(why);
+      };
+      child.once('error', (error) => fail(error.message));
+      child.once('exit', (code, signal) => fail(`exited (${code ?? signal})`));
+      child.stdin.on('error', (error) => fail(error.message));
+      const abort = () => fail('connection cancelled');
+      signal?.addEventListener('abort', abort, { once: true });
+      child.once('close', () => signal?.removeEventListener('abort', abort));
+      if (signal?.aborted) abort();
+      const stream = ndJsonStream(Writable.toWeb(child.stdin), Readable.toWeb(child.stdout));
+      const writer = stream.writable.getWriter();
+      const guardedStream = {
+        readable: stream.readable.pipeThrough(new TransformStream<AnyMessage, AnyMessage>({
+          transform(message, controller) { guard.watch(message); controller.enqueue(message); },
+        })),
+        writable: new WritableStream<AnyMessage>({
+          write(message) { if (guard.settle(message) === 'forward') return writer.write(message); },
+        }),
+      };
+      try {
+        this.connection = client({ name: 'pi-grok-model' })
+          .onNotification('session/update', ({ params }) => {
+            this.sessions.get(params.sessionId)?.onUpdate(params);
+          })
+          .onRequest('session/request_permission', async ({ params }) => {
+            const handler = this.sessions.get(params.sessionId)?.onPermission;
+            return handler ? handler(params) : { outcome: { outcome: 'cancelled' } };
+          })
+          .onRequest('_x.ai/ask_user_question', (raw) => raw as any, async ({ params }) => {
+            const handler = this.sessions.get(params.sessionId ?? params.session_id)?.onQuestion;
+            return handler ? handler(params) : { outcome: 'cancelled' };
+          })
+          .onRequest('_x.ai/hooks/run', (raw) => raw as any, async ({ params }) => {
+            const handler = this.sessions.get(params.sessionId ?? params.session_id)?.onHookRun;
+            const event = String(params.hookEventName ?? '');
+            if (handler) return handler(params, { dialog: () => {} });
+            // No Pi session owns this Grok session (detached by /new or shutdown while a turn was still running).
+            // Pi's capability gate is gone, so tool use is denied rather than left to Grok's own permission mode.
+            if (event === 'pre_tool_use') return { decision: 'deny', reason: 'Pi detached from this Grok session; tool use is denied until a Pi session owns it again.' };
+            return { decision: 'continue' };
+          })
+          .onNotification('_x.ai/session_notification', (raw) => raw as any, ({ params }) => {
+            this.sessions.get(params.sessionId ?? params.session_id)?.onSessionExt?.(params.update);
+          })
+          .onNotification('_x.ai/hooks/event', (raw) => raw as any, ({ params }) => {
+            this.sessions.get(params.sessionId ?? params.session_id)?.onHookEvent?.(params);
+          })
+          .connect(guardedStream);
+        const agent = this.connection.agent;
+        this.initialized = await Promise.race([ended, agent.request('initialize', {
+          protocolVersion: 1,
+          clientInfo: { name: 'pi-grok-model', version: '0.1.0' },
+          clientCapabilities: { fs: { readTextFile: false, writeTextFile: false }, terminal: false },
+        })]);
+        if ((this.initialized.authMethods ?? []).some((m) => m.id === 'cached_token')) {
+          await Promise.race([ended, agent.request('authenticate', { methodId: 'cached_token' })]);
+        } else {
+          // Grok offers `cached_token` only with a stored login. Drop this connection so the turn after a login
+          // initializes again and sees the new credential.
+          this.drop('Grok Build is not signed in');
+          throw new Error('Grok Build is not signed in. Run /grok login, approve the code in your browser, then send the message again.');
+        }
+      } catch (error) {
+        if (this.child === child) this.drop(error instanceof Error ? error.message : String(error));
+        throw new Error(`Grok stdio child ${binary}: ${error instanceof Error ? error.message : String(error)}`, { cause: error });
       }
     })().finally(() => { this.opening = undefined; });
     return this.opening;
@@ -180,27 +170,15 @@ export class GrokModelConnection {
     return this.connection.agent;
   }
 
-  /** Whether a human can answer dialogs; the gateway extends permission deadlines when true. */
+  /** Retained for the extension's UI state; no guard deadlines depend on it. */
   hasUI = false;
 
-  /**
-   * Tell the gateway Pi is alive and what it is doing with a reverse request (`pi/gate-ack`).
-   * The gateway consumes this; it never reaches Grok. Missing acks make the gateway fail closed. A later ack for
-   * the same key moves the request to that tier's deadline (for example a hook that turns into a dialog).
-   */
-  private ack(key: string, state: { dialog?: boolean; check?: boolean }) {
-    void this.connection?.agent.notify('pi/gate-ack', { key, ...state }).catch(() => {});
-  }
+  get mcpBaseUrl() { return this.mcpServer?.baseUrl; }
 
-  /** HTTP origin of the gateway that fronts this WebSocket. */
-  get mcpBaseUrl() {
-    try {
-      const url = new URL(this.options.url);
-      url.protocol = url.protocol === 'wss:' ? 'https:' : 'http:';
-      return url.origin;
-    } catch (cause) {
-      throw new Error(`Invalid Grok gateway URL: ${this.options.url}`, { cause });
-    }
+  private async ensureMcpServer() {
+    if (!this.mcpStarting) this.mcpStarting = startMcpServer((id) => this.servers.get(id));
+    this.mcpServer = await this.mcpStarting;
+    return this.mcpServer;
   }
 
   /** Create or load a Grok session with Grok's native harness intact. `offerPiTools` adds the Pi-hosted MCP server. */
@@ -209,6 +187,7 @@ export class GrokModelConnection {
     if (input.hooks !== false) _meta['x.ai/hooks'] = CLIENT_HOOKS;
     const mcpServers: unknown[] = [];
     if (input.offerPiTools) {
+      await this.ensureMcpServer();
       mcpServers.push({ type: 'http', name: input.serverName, url: `${this.mcpBaseUrl}/mcp/${input.serverId}`, headers: [] });
       _meta.mcpConfig = { [input.serverName]: { toolTimeoutMs: input.toolTimeoutMs ?? 6 * 60 * 60 * 1000 } };
     }
@@ -243,19 +222,32 @@ export class GrokModelConnection {
     this.servers.delete(serverId);
   }
 
-  /** Close the socket but keep this connection usable: the next `open()` reconnects and sessions `session/load` themselves. */
+  /** End only this agent child; a new open starts another and sessions session/load themselves. */
   drop(reason = 'reconnect requested') {
-    const socket = this.socket;
+    const child = this.child;
+    this.guard?.close(reason);
     this.markDropped(reason);
-    socket?.close();
+    if (!child) return;
+    // Flush close-time answers before EOF. Kill a child that does not exit on pipe closure.
+    const stopped = new Promise<void>((resolve) => {
+      if (child.exitCode !== null || child.signalCode !== null) { resolve(); return; }
+      const kill = setTimeout(() => child.kill('SIGKILL'), 500);
+      child.once('close', () => { clearTimeout(kill); resolve(); });
+      child.stdin.end();
+    });
+    this.stopping.add(stopped);
+    void stopped.finally(() => this.stopping.delete(stopped));
   }
 
   async close() {
     this.closed = true;
+    this.drop('Pi connection closed');
     this.sessions.clear();
     this.servers.clear();
-    this.connection = undefined;
-    this.socket?.close();
-    this.socket = undefined;
+    const server = await this.mcpStarting;
+    await server?.close();
+    this.mcpServer = undefined;
+    this.mcpStarting = undefined;
+    await Promise.all(this.stopping);
   }
 }

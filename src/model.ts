@@ -6,7 +6,7 @@ import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { extname, join } from 'node:path';
-import { agentDir, readConfig, writeConfig, type PiPermissionMode } from './config.ts';
+import { readConfig, writeConfig, type PiPermissionMode } from './config.ts';
 import { grokLogin } from './login.ts';
 import { permissionAnswer, permissionDialog } from './model/permissions.ts';
 import { questionAnswerer } from './model/questions.ts';
@@ -77,7 +77,7 @@ export default async function grokModel(pi: ExtensionAPI) {
   // Live blocked Pi extension set: `/grok extensions` mutates this Set in place and persists it, so the
   // next Grok session lends the updated set without a Pi reload. (Grok reads the tool list once per session.)
   const blockedPiExtensions = new Set(config.blockedPiExtensions);
-  const connection = new GrokModelConnection({ url: config.url, secret: config.secret, secretFile: config.secretFile, autoStart: config.autoStartGateway ? { logDir: agentDir } : undefined });
+  const connection = new GrokModelConnection();
   let current: GrokModelSession | undefined;
   // Pi-side permission mode, persisted as `permissionMode` in grok-ws.json so a chosen `/grok perms`
   // survives Pi restarts. Applied to every Grok session in configure().
@@ -154,7 +154,7 @@ export default async function grokModel(pi: ExtensionAPI) {
   const contextWindowFor = (id: string | undefined) => (id && contextWindows[id]) || DEFAULT_CONTEXT_WINDOW;
 
   pi.registerProvider('grok', {
-    baseUrl: config.url,
+    baseUrl: 'stdio://grok',
     apiKey: 'grok-build-login',
     api: GROK_API,
     models: MODEL_IDS.map((id) => ({
@@ -322,7 +322,7 @@ export default async function grokModel(pi: ExtensionAPI) {
             const blockedPiToolNames = blockedToolNamesForExtensions(blockedPiExtensions, piToolAttributions);
             const withheldPiTools = sortedNames(session.piToolNames.filter((toolName) => blockedPiToolNames.has(toolName)));
             show('Grok debug', [
-              `gateway: ${config.url} (${connection.isOpen ? 'connected' : 'not connected'}${connection.launchedGateway ? `, started by this Pi as pid ${connection.launchedGateway}` : ''}${connection.lastDrop ? `, last drop: ${connection.lastDrop}` : ''}; auto-start ${config.autoStartGateway ? 'on' : 'off'})`,
+              `stdio child: ${connection.binary} (${connection.isOpen ? 'connected' : 'not connected'}${connection.lastDrop ? `, last drop: ${connection.lastDrop}` : ''})`,
               `grok session: ${session.grokSessionId ?? '(none yet; first message creates it)'}`,
               `mode: ${session.mode}${session.promptActive ? ' (turn running)' : ''}; pi perms: ${session.permissionMode}; grok mode: ${session.grokMode}`,
               `grok context: ${session.lastContextTokens != null ? `${session.lastContextTokens.toLocaleString()} / ${contextWindowFor(session.grokModel).toLocaleString()}` : 'unknown'}`,

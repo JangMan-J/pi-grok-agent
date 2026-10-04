@@ -1,3 +1,5 @@
+> Historical record: these results describe the WebSocket gateway removed by stdio-direct. They are not evidence for the current stdio child transport. No new live results are claimed here.
+
 # Launch verification
 
 Live results for gate G4 in [launch.md](launch.md). Record each run here, not in `launch.md`. Raw results were written to `evidence/`, which is gitignored and not in the repository. The outcomes below are the record of those runs, not proof that the current version behaves the same way. Treat each one as unverified for the current version until the probe runs again ([usage.md](usage.md#live-probes)).

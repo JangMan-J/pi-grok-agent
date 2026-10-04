@@ -1,6 +1,6 @@
 #!/usr/bin/env node
-// A stand-in for the Grok Build binary, for gateway tests that must not spend Grok usage.
-// Select it with PI_GROK_BINARY. Two modes, matching the argument shapes scripts/server.ts uses:
+// A stand-in for the Grok Build binary, for transport tests that must not spend Grok usage.
+// Select it with PI_GROK_BINARY. Two modes, supporting legacy leader and direct stdio tests:
 //   ... agent leader --leader-socket <path>   hold the leader socket and write <path minus .sock>.lock with this pid
 //   ... agent --leader stdio ...              JSON-RPC over stdio: answers initialize and session/new, emits any
 //                                             message sent as a `test/emit` notification, and appends every
@@ -24,6 +24,7 @@ if (args.includes('leader')) {
   setInterval(() => {}, 60_000); // stay alive until signalled
 } else if (args.includes('stdio')) {
   const log = process.env.FAKE_GROK_LOG;
+  if (log) appendFileSync(log, JSON.stringify({ id: 'spawn', argv: args, autoupdate: process.env.GROK_DISABLE_AUTOUPDATER }) + '\n');
   const send = (message: unknown) => process.stdout.write(JSON.stringify(message) + '\n');
   const lines = createInterface({ input: process.stdin });
   lines.on('line', async (line) => {

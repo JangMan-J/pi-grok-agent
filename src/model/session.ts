@@ -148,7 +148,7 @@ export class GrokModelSession {
     if (!this.connection.isOpen) await this.connection.open();
     if (this.grokSessionId && this.attachedGeneration === this.connection.generation) return;
     if (this.grokSessionId && this.attachedGeneration >= 0) {
-      // Socket dropped since the last attach (for example a gateway restart). session/load the same Grok session; history lives on the leader.
+      // Child dropped since the last attach. A new Pi process also session/loads a stored id; history with --no-leader is unverified live.
       if (this.activePrompt) { this.activePrompt = undefined; this.rejectParked('Grok connection dropped; the turn was lost.'); }
       this.reconnected = this.connection.lastDrop ?? 'reconnected';
     }

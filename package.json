@@ -3,7 +3,7 @@
   "version": "0.1.8",
   "license": "Apache-2.0",
   "type": "module",
-  "description": "Pi model provider for Grok Build: Grok keeps its native harness and tools while Pi drives the session over a local WebSocket ACP gateway",
+  "description": "Pi model provider for Grok Build: Grok keeps its native harness and tools while Pi drives the session over a local stdio ACP child",
   "keywords": [
     "pi-package",
     "pi",
@@ -19,9 +19,7 @@
     "acp-client",
     "acp-agent",
     "acp-provider",
-    "acp-gateway",
     "acp-bridge",
-    "acp-websocket",
     "acp-stdio",
     "grok-acp",
     "json-rpc",
@@ -50,8 +48,6 @@
     "model-context-protocol",
     "mcp-server",
     "tool-calling",
-    "websocket",
-    "gateway",
     "extension",
     "plugin",
     "cli",
@@ -72,12 +68,8 @@
   "engines": {
     "node": ">=22.19.0"
   },
-  "bin": {
-    "pi-grok-gateway": "dist/scripts/server.js"
-  },
   "files": [
     "src",
-    "dist",
     "docs/usage.md",
     "docs/first-class-model.md",
     "README.md",
@@ -93,14 +85,10 @@
   "scripts": {
     "test": "node --test test/*.test.ts",
     "check": "tsc --noEmit",
-    "build": "tsc -p tsconfig.build.json",
-    "prepack": "npm run build",
-    "server": "node scripts/server.ts",
     "test:live": "scripts/model-live.sh gateway && scripts/hooks-live.sh"
   },
   "dependencies": {
     "@agentclientprotocol/sdk": "1.5.0",
-    "ws": "8.22.0",
     "zod": "4.6.5"
   },
   "peerDependencies": {
@@ -124,7 +112,6 @@
     "@earendil-works/pi-coding-agent": "*",
     "@earendil-works/pi-tui": "*",
     "@types/node": "^26.0.0",
-    "@types/ws": "^8.18.1",
     "typescript": "^6.0.0"
   }
 }
