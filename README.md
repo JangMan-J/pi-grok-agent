@@ -17,7 +17,7 @@ Run [Grok Build](https://docs.x.ai/build/overview) as an additional model provid
 <details>
 <summary>Watch the demo (1:20)</summary>
 
-[Play the demo video](https://github.com/user-attachments/assets/affe029e-512a-4f46-8c19-59cc625fe65e)
+[Play the demo video](https://github.com/user-attachments/assets/affe029e-512a-4f46-8c19-59cc625fe65e) (MP4, 80 seconds). The same file is in this repository: [evidence/pi-grok-agent-demo-finalv.mp4](https://github.com/JangMan-J/pi-grok-agent/raw/refs/heads/main/evidence/pi-grok-agent-demo-finalv.mp4).
 
 </details>
 
@@ -32,7 +32,7 @@ Run [Grok Build](https://docs.x.ai/build/overview) as an additional model provid
 └─────────────────────┘         └──────────────────┘         └─────────────────────┘
 ```
 
-Pi drives the session using the [Agent Client Protocol](https://agentclientprotocol.com) over WebSockets. Grok streams back its responses, thinking blocks, as well as any images and videos it generates. Grok runs its own tools, but asks Pi through a hook before each call, and Pi can allow or deny it. Pi's extension tools are lent to Grok over an MCP loopback. The first Grok turn auto-starts the local gateway (`127.0.0.1:2419` by default); every Pi process on the machine attaches to it. Details: [docs/architecture-diagram.md](https://github.com/JangMan-J/pi-grok-agent/blob/main/docs/architecture-diagram.md) · [docs/usage.md](https://github.com/JangMan-J/pi-grok-agent/blob/main/docs/usage.md).
+Pi drives the session using the [Agent Client Protocol](https://agentclientprotocol.com) over WebSockets. Grok streams back its responses and thinking blocks, and Pi shows the images Grok generates. A generated video shows as a file path. Grok runs its own tools, but asks Pi through a hook before each call, and Pi can allow or deny it. Pi's extension tools are lent to Grok over an MCP loopback. The first Grok turn auto-starts the local gateway (`127.0.0.1:2419` by default); every Pi process on the machine attaches to it. Details: [docs/architecture-diagram.md](https://github.com/JangMan-J/pi-grok-agent/blob/main/docs/architecture-diagram.md) · [docs/usage.md](https://github.com/JangMan-J/pi-grok-agent/blob/main/docs/usage.md).
 
 ## Function
 
@@ -50,7 +50,7 @@ Pi drives the session using the [Agent Client Protocol](https://agentclientproto
 | `grok/grok-4.6` | Grok 4.6 | low, medium, high, xhigh |
 | `grok/grok-4.5` | Grok 4.5 | low, medium, high |
 
-Each model's context window is read from Grok Build's model cache (`~/.grok/models_cache.json`) when the extension loads.
+Each model's context window is read from Grok Build's model cache (`~/.grok/models_cache.json`) when the extension loads. Without the cache, Pi uses 256,000 tokens.
 
 Model availability in Pi is determined by your [account access](https://grok.com).
 
@@ -61,7 +61,8 @@ Model availability in Pi is determined by your [account access](https://grok.com
 
 ## Notes
 
-- Not compatible with API key access. A Grok account is required, any membership tier. If your login expires, run `/login` in Grok Build or `/grok login` in Pi to renew it.
+- Requires the Grok Build CLI (`grok` on your `PATH`, or the path in `PI_GROK_BINARY`) and Node.js 22.19 or newer.
+- Not compatible with API key access: Grok Build accepts only its own stored login for agent sessions. A Grok account is required, any membership tier; a free account had only `grok-4.7` in the [recorded run](https://github.com/JangMan-J/pi-grok-agent/blob/main/docs/launch-verification.md). If your login expires, run `grok login` or `/login` in Grok Build, or `/grok login` in Pi, to renew it.
 - The input, output, cache read, and cache write token counts and the cost shown in Pi come from Grok Build's usage report. Pi may occasionally report inaccurate data during long multistep tool calls, but will correct on the next turn.
 
 ## Documentation
@@ -69,7 +70,7 @@ Model availability in Pi is determined by your [account access](https://grok.com
 - [docs/usage.md](https://github.com/JangMan-J/pi-grok-agent/blob/main/docs/usage.md): settings, lent tools, permissions, the gateway guard, hooks, `/grok` commands, troubleshooting
 - [docs/architecture-diagram.md](https://github.com/JangMan-J/pi-grok-agent/blob/main/docs/architecture-diagram.md): the diagram in mermaid and ASCII
 - [docs/first-class-model.md](https://github.com/JangMan-J/pi-grok-agent/blob/main/docs/first-class-model.md): design and turn mapping
-- [docs/launch-verification.md](https://github.com/JangMan-J/pi-grok-agent/blob/main/docs/launch-verification.md): recorded live runs behind the verified claims
+- [docs/launch-verification.md](https://github.com/JangMan-J/pi-grok-agent/blob/main/docs/launch-verification.md): recorded live runs and their versions (raw results are not in the repository)
 
 ## Feedback
 
