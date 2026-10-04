@@ -1,4 +1,4 @@
-import { readFile } from 'node:fs/promises';
+import { readFile, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { isAbsolute, join } from 'node:path';
 import { validateEndpoint } from './client.ts';
@@ -9,7 +9,26 @@ export const defaultSecretFile = join(agentDir, 'grok-ws.secret');
 
 /** Which Pi tools the `grok` model provider offers to Grok in addition to Grok's own harness tools. */
 export type PiToolPolicy = 'none' | 'extensions' | 'all' | string[];
+
+/** Pi core tools: Grok has a native equivalent for each, so `extensions` never lends them. */
 export const PI_CORE_TOOLS = new Set(['read', 'bash', 'edit', 'write', 'grep', 'find', 'ls']);
+
+/**
+ * Extension tools that shadow a Grok native tool. `extensions` withholds these on top of the core set,
+ * so Grok does not route code navigation through the MCP loopback when its own harness already does it.
+ * These are pi-lens code-intelligence tools versus Grok's native `read_file`/`grep`/`list_dir`/LSP.
+ * This is the package default; a user's `piToolBlacklist` in `grok-ws.json` (edited via `/grok tools`)
+ * overrides it. The blacklist only applies to the `extensions` policy; `all` and an explicit allow-list
+ * are deliberate and are lent verbatim.
+ */
+export const PI_SHADOW_TOOLS = new Set([
+  'symbol_search',
+  'project_report',
+  'module_report',
+  'read_symbol',
+  'read_enclosing',
+  'lens_diagnostics',
+]);
 
 /**
  * How the `grok` model provider answers Grok's native permission prompts when Pi has no UI (`-p`, Fabric workers).
@@ -84,7 +103,7 @@ export async function readSecretFile(secretFile: string): Promise<string | undef
 }
 
 export async function readConfig() {
-  let settings: { url?: string; secretFile?: string; piTools?: PiToolPolicy; hooks?: HookSettings; headlessPermissions?: HeadlessPermissionPolicy; guard?: GuardSettings; mediaDir?: string; grokMode?: GrokMode; autoStartGateway?: boolean } = {};
+  let settings: { url?: string; secretFile?: string; piTools?: PiToolPolicy; piToolBlacklist?: string[]; hooks?: HookSettings; headlessPermissions?: HeadlessPermissionPolicy; guard?: GuardSettings; mediaDir?: string; grokMode?: GrokMode; autoStartGateway?: boolean } = {};
   try { settings = JSON.parse(await readFile(configPath, 'utf8')); }
   catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error; }
   const url = validateEndpoint(process.env.GROK_ACP_URL || settings.url || 'ws://127.0.0.1:2419/ws');
@@ -95,6 +114,9 @@ export async function readConfig() {
   // the file may not have run yet. The connection reads the file again when it opens (`readSecretFile`).
   const secret = process.env.GROK_AGENT_SECRET || (await readSecretFile(secretFile)) || '';
   const piTools: PiToolPolicy = process.env.PI_GROK_PI_TOOLS ? parsePolicy(process.env.PI_GROK_PI_TOOLS) : settings.piTools ?? 'extensions';
+  // Effective shadow blacklist: the stored list is authoritative when present (the `/grok tools` command
+  // seeds it from PI_SHADOW_TOOLS on first edit); otherwise the package defaults apply.
+  const piToolBlacklist: string[] = Array.isArray(settings.piToolBlacklist) ? settings.piToolBlacklist : [...PI_SHADOW_TOOLS];
   const hooks: HookSettings = { ...settings.hooks };
   if (process.env.PI_GROK_STOP_CHECK) hooks.stopCheck = process.env.PI_GROK_STOP_CHECK;
   if (process.env.PI_GROK_POST_EDIT_CHECK) hooks.postEditCheck = process.env.PI_GROK_POST_EDIT_CHECK;
@@ -108,7 +130,19 @@ export async function readConfig() {
   if (!['default', 'auto', 'yolo'].includes(grokMode)) throw new Error(`grokMode must be default, auto, or yolo (got ${grokMode}).`);
   // Start the bundled gateway when nothing listens on the endpoint. PI_GROK_AUTOSTART=0 or autoStartGateway: false turns it off.
   const autoStartGateway = process.env.PI_GROK_AUTOSTART ? !['0', 'false', 'no', 'off'].includes(process.env.PI_GROK_AUTOSTART.toLowerCase()) : settings.autoStartGateway ?? true;
-  return { url, secret, secretFile, piTools, hooks, headlessPermissions, guard, mediaDir, grokMode, autoStartGateway };
+  return { url, secret, secretFile, piTools, piToolBlacklist, hooks, headlessPermissions, guard, mediaDir, grokMode, autoStartGateway };
+}
+
+/**
+ * Merge keys into `grok-ws.json`, preserving the rest. Creates the file when absent. Used by `/grok tools`
+ * to persist blacklist edits. Not concurrency-safe against another writer, which does not happen here:
+ * one interactive Pi session edits its own config.
+ */
+export async function writeConfig(patch: Record<string, unknown>): Promise<void> {
+  let current: Record<string, unknown> = {};
+  try { current = JSON.parse(await readFile(configPath, 'utf8')); }
+  catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error; }
+  await writeFile(configPath, JSON.stringify({ ...current, ...patch }, null, 2) + '\n');
 }
 
 function parsePolicy(value: string): PiToolPolicy {
@@ -116,10 +150,13 @@ function parsePolicy(value: string): PiToolPolicy {
   return value.split(',').map((s) => s.trim()).filter(Boolean);
 }
 
-export function selectPiTools<T extends { name: string }>(tools: T[], policy: PiToolPolicy): T[] {
+export function selectPiTools<T extends { name: string }>(tools: T[], policy: PiToolPolicy, blacklist: Iterable<string> = PI_SHADOW_TOOLS): T[] {
   if (policy === 'none') return [];
   if (policy === 'all') return tools;
-  if (policy === 'extensions') return tools.filter((t) => !PI_CORE_TOOLS.has(t.name));
+  if (policy === 'extensions') {
+    const shadow = new Set(blacklist);
+    return tools.filter((t) => !PI_CORE_TOOLS.has(t.name) && !shadow.has(t.name));
+  }
   const allowed = new Set(policy);
   return tools.filter((t) => allowed.has(t.name));
 }

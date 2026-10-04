@@ -140,10 +140,26 @@ Pi can offer its own tools to Grok in addition to Grok's tools. `piTools` in `gr
 
 | Value | Tools offered to Grok |
 | --- | --- |
-| `extensions` (default) | Pi tools other than `read`, `bash`, `edit`, `write`, `grep`, `find`, `ls` |
+| `extensions` (default) | Pi tools other than the core set and the shadow blacklist (below) |
 | `none` | No Pi tools |
-| `all` | Every Pi tool |
-| `a,b,c` | The named tools |
+| `all` | Every Pi tool (ignores the blacklist) |
+| `a,b,c` | The named tools (ignores the blacklist) |
+
+The core set Grok already has natively is always withheld under `extensions`: `read`, `bash`, `edit`, `write`, `grep`, `find`, `ls`.
+
+### Shadow blacklist
+
+Some Pi extension tools duplicate a Grok native tool under a different name, so Grok would route that work through the MCP loopback instead of using its own harness. The clearest case is pi-lens code navigation (`symbol_search`, `project_report`, `module_report`, `read_symbol`, `read_enclosing`, `lens_diagnostics`) versus Grok's native `read_file`, `grep`, `list_dir`, and LSP. Under `extensions` these are withheld on top of the core set. The package ships this blacklist as the default (`PI_SHADOW_TOOLS` in `src/config.ts`); `all` and a named allow-list ignore it.
+
+Edit the blacklist with `/grok tools`:
+
+| Command | Effect |
+| --- | --- |
+| `/grok tools` or `/grok tools list` | Show the current blacklist: package defaults plus your additions. |
+| `/grok tools block <name>` | Withhold another Pi tool from Grok. |
+| `/grok tools unblock <name>` | Lend a blacklisted tool to Grok again (including a package default). |
+
+Edits persist to `piToolBlacklist` in `grok-ws.json` and take effect on the next Grok session (Grok reads the tool list once per session). A `piToolBlacklist` in the file is authoritative: it replaces the package defaults, so `/grok tools unblock` can drop a default and it stays dropped.
 
 Grok sees an offered tool as `pi__<name>`. When Grok calls it, the Pi assistant message ends with a tool call, Pi executes the tool through its own loop and permission gates, and the same Grok turn continues with the result. Pi passes the complete tool result to Grok.
 
@@ -218,6 +234,7 @@ Optional settings file: `~/.pi/agent/grok-ws.json`. If `PI_CODING_AGENT_DIR` is 
   "url": "ws://127.0.0.1:2419/ws",
   "secretFile": "~/.pi/agent/grok-ws.secret",
   "piTools": "extensions",
+  "piToolBlacklist": ["symbol_search", "module_report", "read_symbol"],
   "headlessPermissions": "dialog",
   "mediaDir": ".pi/grok-images",
   "grokMode": "default",

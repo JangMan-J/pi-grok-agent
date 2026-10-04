@@ -59,8 +59,13 @@ Results of lent Pi tools go to Grok complete, text and image blocks included (`r
 ## Lent tools policy
 
 `piTools` selects what Pi offers: `extensions` (default), `none`, `all`, or a list of names.
-The default excludes Pi core tools, so Grok's own file and shell tools have no duplicates.
-Grok chooses between its own tools and lent ones.
+Under `extensions` the Pi core tools are never lent (Grok has native equivalents), and neither is the
+shadow blacklist: extension tools that duplicate a Grok native tool under a different name. The package
+default blacklist (`PI_SHADOW_TOOLS`) is pi-lens code navigation \u2014 `symbol_search`, `project_report`,
+`module_report`, `read_symbol`, `read_enclosing`, `lens_diagnostics` \u2014 which otherwise shadow Grok's
+own `read_file`/`grep`/`list_dir`/LSP and pull that work onto the MCP loopback. Users edit the blacklist
+with `/grok tools block|unblock`, persisted to `piToolBlacklist` in `grok-ws.json`. `all` and a named
+allow-list ignore the blacklist. Grok chooses between its own tools and any lent ones.
 
 ## Leader routing and the HTTP relay
 

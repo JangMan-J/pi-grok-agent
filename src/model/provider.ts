@@ -40,7 +40,7 @@ export const MODEL_IDS = ['grok-4.7', 'grok-4.7-build-fast', 'grok-4.6', 'grok-4
 const BATCH_GRACE_MS = 150;
 const PREAMBLE_LIMIT = 60_000;
 
-export interface SessionResolver { current(): GrokModelSession | undefined; piTools?: PiToolPolicy; }
+export interface SessionResolver { current(): GrokModelSession | undefined; piTools?: PiToolPolicy; piToolBlacklist?: Iterable<string>; }
 
 function zeroUsage(): Usage { return { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } }; }
 
@@ -127,7 +127,7 @@ export function createGrokStream(connection: GrokModelConnection, sessions: Sess
       const isNew = !session.grokSessionId;
       const piTools = getCurrentTools(context.messages);
       session.piToolNames = piTools.map((t) => t.name);
-      session.tools = selectPiTools(piTools, sessions.piTools ?? 'extensions');
+      session.tools = selectPiTools(piTools, sessions.piTools ?? 'extensions', sessions.piToolBlacklist);
       await session.attach(getCurrentSystemPrompt(context.messages) || undefined);
       await session.applyModel(model.id); // before the effort: grok-4.5 has no xhigh
       await session.applyEffort(options?.reasoning); // Pi's thinking level drives Grok's reasoning_effort
