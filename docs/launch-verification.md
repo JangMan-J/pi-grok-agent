@@ -1,6 +1,6 @@
 # Launch verification
 
-Live results for gate G4 in [launch.md](launch.md). Record each run here, not in `launch.md`. Raw results are in `evidence/` (sanitized: home paths as `~/`, scratch directories as `/tmp/<scratch>`, session and call IDs replaced).
+Live results for gate G4 in [launch.md](launch.md). Record each run here, not in `launch.md`. Raw results were written to `evidence/`, which is gitignored and not in the repository. Run the probes again to reproduce them ([usage.md](usage.md#live-probes)).
 
 ## Run 2026-09-28
 

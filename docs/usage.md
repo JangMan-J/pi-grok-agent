@@ -363,7 +363,7 @@ The unit tests cover the turn split around a lent tool call, abort and resend, p
 
 ## Live probes
 
-The scripts in `scripts/` run against a running gateway and your Grok login. They cost Grok usage. Several of them allow Grok's permission prompts inside temporary directories. They write JSON results to `evidence/` in the repository root. That directory is not in the repository, and it is not ignored by git. Create it first:
+The scripts in `scripts/` run against a running gateway and your Grok login. They cost Grok usage. Several of them allow Grok's permission prompts inside temporary directories. They write JSON results to `evidence/` in the repository root. That directory is ignored by git. Create it first:
 
 ```sh
 mkdir -p evidence
@@ -386,7 +386,7 @@ npm run test:live    # model-live.sh gateway, then hooks-live.sh
 
 `scripts/reconnect-probe.ts` is not isolated. It hardcodes port 2419 and reads a gateway PID from `~/.pi/agent/grok-ws.pid`, a file that `npm run server` does not write. It sends SIGTERM to that PID (gateway mode) or to its `agent leader` child (leader mode). `GROK_ACP_URL`, `PI_CODING_AGENT_DIR`, and the other variables do not change these targets. Run it only when the default gateway on 2419 is disposable and the PID file names it. Its check for other clients looks only at port 2419.
 
-Sanitized results from the run recorded in [launch-verification.md](launch-verification.md) are in `evidence/`. Treat the probes as reproducible checks, and run them again for current results. Probe output and `evidence/` files can contain private paths, session IDs, and tokens. Review and redact them before you share them.
+The results of the run recorded in [launch-verification.md](launch-verification.md) are not in the repository. Treat the probes as reproducible checks, and run them again for current results. Probe output and `evidence/` files can contain private paths, session IDs, and tokens. Review and redact them before you share them.
 
 ## Troubleshooting
 
