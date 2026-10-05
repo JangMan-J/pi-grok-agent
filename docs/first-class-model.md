@@ -1,6 +1,6 @@
 # Grok Build as a Pi model: design
 
-Version 0.2.0. This page describes the implemented design. For use and settings, see the [README](../README.md) and [usage.md](usage.md).
+Version 0.1.8. This page describes the implemented design. For use and settings, see the [README](../README.md) and [usage.md](usage.md).
 
 Goal: `pi --model grok/<id>`, and any Pi caller that selects a model by ID, uses Grok Build as the model.
 Grok runs each turn on its own harness. Its native tools, permission rules, subagents, compaction, and history stay on the Grok side.
