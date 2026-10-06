@@ -67,6 +67,8 @@ export const CLIENT_HOOKS = {
 };
 
 const UNKNOWN_SESSION = 'No Pi session owns this Grok session; the request was answered immediately.';
+/** Grok's file watcher injects these ids into its own ACP stdin and replies on stdout. */
+const GROK_INTERNAL_RELOAD_IDS = new Set(['skills-reload', 'workflows-reload']);
 
 export class GrokModelConnection {
   private child?: AgentChild;
@@ -367,6 +369,10 @@ export class GrokModelConnection {
                 finishEnd(leashFailure);
                 fail(leashFailure);
               }
+              return;
+            }
+            if (!('method' in message) && 'id' in message && GROK_INTERNAL_RELOAD_IDS.has(String(message.id))) {
+              this.writeLog(`framing: dropped Grok internal reload response ${String(message.id)}`);
               return;
             }
             if ('method' in message && 'id' in message && ['_x.ai/hooks/run', 'session/request_permission', '_x.ai/ask_user_question'].includes(message.method)) {

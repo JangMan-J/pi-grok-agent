@@ -141,6 +141,7 @@ These recover with no user step:
 - `session/load` says the id is missing. Pi sends `session/new`, stores the new id, and shows `[grok session <id> not found; started a new one]` once. A timeout or a closed pipe does not take this path.
 - The stored id belongs to another directory. Grok stores sessions under `~/.grok/sessions/<encoded-cwd>/<id>/` (`~/.grok/docs/user-guide/17-sessions.md`). Pi starts a new session and shows `[grok session <id> belongs to <old cwd>; started a new one]` once.
 - Stdout contains a non-JSON line, a partial line, or a warning glued onto the next `{"jsonrpc"` frame. The bad text is logged and skipped. The JSON-RPC frame is kept. Child stderr goes to the stdio log, never to Pi's stdout.
+- Grok's skills/workflows file watcher replies on stdout with JSON-RPC ids `skills-reload` and `workflows-reload`. Those responses are dropped before the ACP SDK so they do not `console.error` into the Pi TUI (`src/model/connection.ts`, `test/transport.test.ts`).
 - A write fills the stdin buffer. The write waits for drain, then continues. A multi-megabyte tool result is delivered.
 - A reverse request names a Grok session Pi does not own. Pi answers deny or cancel immediately.
 - A hook payload is missing `hookEventName`, or the handler throws. Pi denies that hook with a reason.

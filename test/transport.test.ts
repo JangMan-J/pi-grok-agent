@@ -235,3 +235,31 @@ test('sdk_call routes one MCP message through the session handler', async (t) =>
   assert.equal(received(s, 'sdk-error')[0].result.error.code, -32603);
   assert.equal(received(s, 'sdk-missing')[0].result.error.code, -32603);
 });
+
+test('Grok skills and workflows watcher replies are dropped before the ACP SDK', async (t) => {
+  const s = scratch(); t.after(s.cleanup);
+  const connection = connect(s);
+  t.after(() => connection.close());
+  const error = t.mock.method(console, 'error', () => {});
+  const updates: string[] = [];
+  await connection.open();
+  await connection.attachSession({
+    ...input,
+    sessionId: 'fake-session',
+    handlers: {
+      onUpdate(notification) {
+        const text = (notification.update as { content?: { text?: string } }).content?.text;
+        if (text) updates.push(text);
+      },
+      async onMcp() { return {}; },
+    },
+  });
+  await connection.agent.notify('test/emit', { jsonrpc: '2.0', id: 'skills-reload', result: { reloaded: 1 } });
+  await connection.agent.notify('test/emit', { jsonrpc: '2.0', id: 'workflows-reload', result: { reloaded: 1 } });
+  await connection.agent.notify('test/emit', { jsonrpc: '2.0', method: 'session/update', params: { sessionId: 'fake-session', update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'still-live' } } } });
+  await until(() => updates.includes('still-live'), 'follow-up session/update after watcher replies');
+  assert.equal(error.mock.calls.some((call) => call.arguments[0] === 'Got response to unknown request' && (call.arguments[1] === 'skills-reload' || call.arguments[1] === 'workflows-reload')), false);
+  const log = existsSync(join(s.home, 'grok-stdio.log')) ? readFileSync(join(s.home, 'grok-stdio.log'), 'utf8') : '';
+  assert.match(log, /framing: dropped Grok internal reload response skills-reload/);
+  assert.match(log, /framing: dropped Grok internal reload response workflows-reload/);
+});
